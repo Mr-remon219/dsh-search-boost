@@ -142,3 +142,7 @@ plugin-host.js              — alternative session-level dynamic plugin (full s
 ## License
 
 MIT
+
+## Friends
+
+- [Linux.do](https://linux.do/) — open-source developer community
