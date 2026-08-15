@@ -11,7 +11,7 @@
 // This plugin runs inside the dsh host process, so it uses Node's fetch /
 // child_process directly — no sandbox shell indirection needed.
 
-import { loadKeys, engineRegistry, runChain, ENGINE_ORDER } from './lib/engines.js'
+import { loadKeys, engineRegistry, ENGINE_ORDER } from './lib/engines.js'
 import { fusedSearch, makeCache, estimateComplexity, TIER_ENGINES } from './lib/fusion.js'
 import { fetchPage, makePageCache } from './lib/fetch.js'
 import { searchX, grokAvailable } from './lib/grok.js'
@@ -58,17 +58,40 @@ function registerSearchProvider(ctx, engines) {
     id: 'dsh-search-boost',
     available: () => true,
     async search(request, signal) {
-      const count = request.maxResults ?? 6
-      const { engine, hits } = await runChain(engines, request.query, Math.min(count, 10), {})
+      const count = Math.min(request.maxResults ?? 6, 10)
+      // Parallel fan-out over every available free engine (bing + ddg curl
+      // scrapes, agy CLI where installed) instead of a serial failover chain:
+      // one engine failing no longer costs a second round-trip. Reuses the
+      // same 6h cache as fused_search. NOTE: do not add a deepseek-native
+      // engine here — ctx.web.search resolves the configured seam (which is
+      // this provider after our patch) and would recurse into itself.
+      const engineNames = TIER_ENGINES.simple.filter((e) => engines[e]?.available())
+      const result = await fusedSearch({
+        query: request.query,
+        maxResults: count,
+        engines: engineNames,
+        tier: 'simple',
+        runOne: async (engineName, q, n, o) => {
+          const engine = engines[engineName]
+          if (!engine?.available()) throw new Error(`${engineName} unavailable`)
+          return engine.search(q, n, o)
+        },
+      })
+      if (result.results.length === 0) {
+        const errs = Object.entries(result.engineStats)
+          .filter(([, v]) => v.errors > 0)
+          .map(([k, v]) => `${k}: ${v.note ?? 'error'}`)
+        throw new Error(`dsh-search-boost: no engine could answer (${errs.join('; ') || 'all engines unavailable'})`)
+      }
       return {
-        content: `[dsh-search-boost] answered via ${engine}`,
-        sources: hits.slice(0, count).map((h) => ({
+        content: `[dsh-search-boost] ${result.results.length} sources from ${result.engineStats ? Object.keys(result.engineStats).filter((e) => result.engineStats[e].errors === 0).join('+') : ''}`,
+        sources: result.results.slice(0, count).map((h) => ({
           url: h.url,
           ...(h.title ? { title: h.title } : {}),
           ...(h.snippet ? { snippet: h.snippet.slice(0, 300) } : {}),
           ...(h.published ? { publishedAt: h.published } : {}),
         })),
-        truncated: hits.length > count,
+        truncated: result.results.length > count,
       }
     },
   })
@@ -80,7 +103,8 @@ function registerFusedSearchTool(ctx, engines) {
   ctx.tools.register({
     name: 'fused_search',
     description:
-      'Multi-engine fused web search (Antigravity CLI free → Bing → Tavily → Brave → Exa, parallel where possible). ' +
+      'Multi-engine fused web search (free engines run in parallel: Antigravity CLI / Bing / DuckDuckGo — all keyless; ' +
+      'keyed Tavily / Brave / Exa join when keys exist). ' +
       'CALL THIS BEFORE ANSWERING any fact that may be stale or external to the conversation: versions, release dates, ' +
       'current status, prices, API changes, benchmarks, comparisons, or anything quoted from another source — do not answer from memory. ' +
       'Beyond a trivial one-line lookup, prefer this over web_search: it runs query variants across engines, dedupes URLs, ' +
