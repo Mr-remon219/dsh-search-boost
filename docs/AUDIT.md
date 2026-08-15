@@ -2,7 +2,10 @@
 
 基线：`d22f890`（v0.0.1 / `main`）。  
 对照：三份 Cloud Agent 调研（两份「项目优化研究」+ 一份「项目优化方案」）+ 本仓库源码复核。  
-复现：`node scripts/verify-audit.mjs`（当前 **14/14 复现**）。
+回归：`npm test` / `node scripts/verify-audit.mjs`（修复后应变为全部通过）。
+
+**本轮已修：** P0-1、P0-2、P0-3、P1-4、P1-5、P1-6、P1-7、P1-8、P1-9、P1-11、P1-12、P1-13。  
+**刻意未修：** P1-10（`WebFetchProvider`，需对齐官方结果形状后再做）、P2-14（`plugin-host.js` `debug_shell`）。
 
 本清单只列**现在最该改**的项。RRF 换分、Firecrawl/Exa 匿名腿、npm 发布、目录收录**不在本轮**——那些是提质和分发，不是正确性。
 
