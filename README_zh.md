@@ -39,6 +39,19 @@ dsh plugin --profile web add git+file:///path/to/repo # 本地 git 源（协议�
 
 装完重启 `dsh --profile web` 即用：内置 `web_search` 走本插件引擎链，`fused_search` / `fetch_page` / `x_search` / `deep_research` / `research_parallel` / `search_stats` 全部注册。git 源安装协议已实测通过（pnpm 拉取 → patch 层生效 → 端到端可用）。
 
+### 排查：「未找到 dsh CLI」
+
+DSH 官方推荐 `npx @deepseek-ai/dsh web` 运行，**不会产生全局 `dsh` 命令**，安装脚本因此检测不到。脚本现在会自动探测 npx 缓存（`%LOCALAPPDATA%\npm-cache\_npx\*` / `~/.npm/_npx/*`）和 npm 全局前缀，通常开箱即过。若仍失败，任选其一：
+
+1. 全局安装（推荐），装完重开终端：
+   ```sh
+   npm install -g @deepseek-ai/dsh
+   ```
+2. 跳过脚本，直接用 npx 执行安装：
+   ```sh
+   npx --yes @deepseek-ai/dsh plugin --profile web add <本仓库路径>
+   ```
+
 ```sh
 dsh --profile web --dump-config   # web.searchProvider 应为 dsh-search-boost
 dsh --profile web                 # 启动后内置 web_search 即走本插件引擎链

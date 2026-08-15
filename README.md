@@ -39,6 +39,19 @@ Or run the install script from the repo (syntax check → key setup → install 
 
 After installing, restart `dsh --profile web`. The built-in `web_search` now runs on this plugin's engine chain, and `fused_search` / `fetch_page` / `x_search` / `deep_research` / `research_parallel` / `search_stats` are all registered. The git-source install protocol has been verified end to end (pnpm fetch → patch layer applied → usable).
 
+### Troubleshooting: "dsh CLI not found"
+
+The official way to run DSH is `npx @deepseek-ai/dsh web`, which leaves **no global `dsh` command** — the install script can't see it. The script now auto-detects the npx cache (`%LOCALAPPDATA%\npm-cache\_npx\*` / `~/.npm/_npx/*`) and npm global prefix, so this usually just works. If it still fails, either:
+
+1. Install globally (recommended), then reopen your terminal:
+   ```sh
+   npm install -g @deepseek-ai/dsh
+   ```
+2. Skip the script and run the install via npx directly:
+   ```sh
+   npx --yes @deepseek-ai/dsh plugin --profile web add <path-to-this-repo>
+   ```
+
 ```sh
 dsh --profile web --dump-config   # web.searchProvider should be dsh-search-boost
 dsh --profile web                 # built-in web_search now uses this plugin's chain
