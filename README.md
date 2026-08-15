@@ -1,127 +1,73 @@
 # dsh-search-boost
 
-> DeepSeek Harness (DSH) 网络搜索增强插件 —— 多引擎融合搜索、正文抓取、X 搜索、深度研究、多 agent 并行研究、主动搜索守则。
+> Search boost for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH): multi-engine fused search, focused page fetching, X (Twitter) search, step-mode deep research, parallel multi-agent research, and an injected proactive-search policy.
 
-A bundle plugin for DeepSeek Harness: multi-engine fused search (free-by-default Antigravity CLI / Bing chain with Tavily / Brave / Exa failover), focused page fetching, X (Twitter) search via Grok Build, step-mode deep research, parallel multi-agent research, and an injected proactive-search policy.
+A **bundle plugin** for DSH that upgrades the built-in `web_search` and registers a family of search tools:
 
-## 特性
+- Free-by-default engine chain: **Antigravity CLI → Bing** with keyed **Tavily → Brave → Exa** failover.
+- Fused multi-engine ranking with cross-engine co-occurrence scoring and time-decay freshness.
+- Deep research driven by the main agent, and parallel research fanned out to native DSH subagents.
 
-| 能力 | 说明 |
+## Features
+
+| Capability | Description |
 |---|---|
-| **内置 web_search 升级** | 通过 `WebSearchProvider` 注册 + patch 改写 `searchProvider`，内置 `web_search` 直接跑在本插件的免费优先引擎链上（保留原生引用卡片） |
-| `fused_search` | 多引擎融合检索：免费引擎优先（Antigravity CLI → Bing），keyed 引擎 failover（Tavily → Brave → Exa）。复杂度路由、Grok 风格查询预处理（`site:` / `OR` / 引号）、域名硬过滤、半衰期时效衰减、跨引擎共现打分、6h TTL 缓存 |
-| `x_search` | X/Twitter 搜索：通过本地 Grok Build CLI 借道（`~/.grok/auth.json` 登录态），返回结构化证据（summary + 帖子列表 + 不确定性）；无订阅时 45s 超时降级，不阻塞调用 |
-| `fetch_page` | Jina Reader 正文抓取 + 本地 HTML 回退 + `focus` 定向提取（省 ~90% token）+ 24h 缓存 |
-| `deep_research` | step 模式深研：complex 融合检索 + 覆盖度分析 + 跨域佐证统计 + 缺口 + 建议查询，**由主 agent 驱动多轮直至收敛** |
-| `research_parallel` | 多 agent 并行深研：子查询分解 → 并行派 DSH 原生 subagent（每代理独立上下文，继承 fused_search/fetch_page）→ 时间预算 → 来源合并 |
-| `search_stats` | 缓存 / 分档 / 引擎可用性 / grok 状态审计 |
-| 搜索守则 | `systemPrompt.section` 正规注入：时效事实必搜、技术论断验证、X 内容路由 x_search、停止条件、成本感知（免费引擎优先） |
+| **Built-in `web_search` upgrade** | Registers a `WebSearchProvider` and patches `searchProvider`, so the built-in `web_search` runs on this plugin's free-first engine chain (native citation cards preserved) |
+| `fused_search` | Multi-engine fused retrieval: free engines first (Antigravity CLI → Bing), keyed engines fail over (Tavily → Brave → Exa). Complexity routing, Grok-style query preprocessing (`site:` / `OR` / quotes), hard domain filters, half-life time-decay freshness, cross-engine co-occurrence scoring, 6h TTL cache |
+| `x_search` | X/Twitter search via the local Grok Build CLI (`~/.grok/auth.json` login state). Returns structured evidence (summary + posts + uncertainty); degrades gracefully after a 45s timeout when there is no subscription, never blocks the call |
+| `fetch_page` | Jina Reader content extraction + local HTML fallback + `focus`-based topic extraction (saves ~90% tokens) + 24h cache |
+| `deep_research` | Step-mode deep research: complex fused search + coverage analysis + cross-domain corroboration stats + gaps + suggested queries, **driven by the main agent in rounds until convergence** |
+| `research_parallel` | Parallel multi-agent research: sub-query decomposition → fan out to native DSH subagents (each with its own context, inheriting `fused_search` / `fetch_page`) → time budget → merged sources |
+| `search_stats` | Audit of cache / tier distribution / engine availability / grok status |
+| Search policy | Injected via `systemPrompt.section`: time-sensitive facts must be searched, technical claims verified, X content routed to `x_search`, stop conditions, cost awareness (free engines first) |
 
-## 安装（bundle，推荐）
+## Installation (bundle — recommended)
 
-**一条命令**（发布后，或本地 git 源）：
+**One command** (after publishing, or from a local git source):
 
 ```sh
-dsh plugin add github:Mr-remon219/dsh-search-boost   # 发布后
-dsh plugin --profile web add git+file:///path/to/repo # 本地 git 源（协议已实测）
+dsh plugin add github:Mr-remon219/dsh-search-boost    # published
+dsh plugin --profile web add git+file:///path/to/repo # local git source (protocol verified)
 ```
 
-或者直接运行仓库内的安装脚本（含校验/配置/安装/验证）：
+Or run the install script from the repo (syntax check → key setup → install → verification):
 
 ```powershell
-.\install.ps1          # Windows（默认装进 profile "web"）
+.\install.ps1          # Windows (defaults to profile "web")
 ./install.sh           # Linux / macOS
 ```
 
-装完重启 `dsh --profile web` 即用：内置 `web_search` 走本插件引擎链，`fused_search` / `fetch_page` / `x_search` / `deep_research` / `research_parallel` / `search_stats` 全部注册。git 源安装协议已实测通过（pnpm 拉取 → 层生效 → 端到端可用）。
+After installing, restart `dsh --profile web`. The built-in `web_search` now runs on this plugin's engine chain, and `fused_search` / `fetch_page` / `x_search` / `deep_research` / `research_parallel` / `search_stats` are all registered. The git-source install protocol has been verified end to end (pnpm fetch → patch layer applied → usable).
 
 ```sh
-dsh --profile web --dump-config   # web.searchProvider 应为 dsh-search-boost
-dsh --profile web                 # 启动后内置 web_search 即走本插件引擎链
+dsh --profile web --dump-config   # web.searchProvider should be dsh-search-boost
+dsh --profile web                 # built-in web_search now uses this plugin's chain
 ```
 
-**无头端到端验证**（不启动 GUI）：在 profile 的 `cordis.patch.yml` 追加 headless-runner 插件行（`inject: [headlessStartup]` + `config.task: !!js ctx.headlessStartup.task`，见内置 `@deepseek-ai/dsh-headless` 的 patch），然后 `dsh --profile <name> "用 web_search 搜索 …"` 直接跑任务验证。
+**Headless end-to-end verification** (no GUI): append a headless-runner plugin row to the profile's `cordis.patch.yml` (`inject: [headlessStartup]` + `config.task: !!js ctx.headlessStartup.task`, see the patch shipped with the built-in `@deepseek-ai/dsh-headless`), then run:
 
-## 备选：会话级动态插件（plugin-host.js）
-
-`plugin-host.js` 是单文件动态插件形态（会话内 `cordis_define` 安装），不替换内置 `web_search`，适合单会话快速增强；bundle 形态（推荐）为部署级，内置 web_search 直接升级。
-
-## 配置（API Key）
-
-bundle 运行在宿主进程，key 从以下来源按序加载：
-
-1. `~/.dsh-search-boost-keys.json`（推荐）或工作区 `./.search-boost-keys.json`：
-
-```json
-{
-  "tavily": "tvly-...",
-  "exa": "...",
-  "brave": "..."
-}
+```sh
+dsh --profile <name> "use web_search to search …"
 ```
 
-2. 环境变量回退：`TAVILY_API_KEY` / `EXA_API_KEY` / `BRAVE_API_KEY`
+## Alternative: session-level dynamic plugin (`plugin-host.js`)
 
-缺 key 的引擎自动从链上剔除。**免费引擎无需任何配置**：Antigravity CLI（macOS/Linux 装一次、浏览器登录一次）与 Bing（零配置）开箱即用；X 搜索需要本机装有 Grok Build 且已登录（SuperGrok / X Premium 订阅）。
+`plugin-host.js` is a single-file dynamic plugin installed inside a session via `cordis_define`. It does **not** replace the built-in `web_search` and is suited for quick per-session boosts; the bundle form (recommended) is deployment-level and upgrades the built-in `web_search` directly.
 
-## 实测基准（2026-08，Windows + headless）
-
-| 场景 | 数据 |
-|---|---|
-| `dsh plugin add` 安装 + 层生效 | ✓（dump-config 确认 searchProvider 改写 + 插件行插入） |
-| headless 端到端 web_search | ✓（profile 内嵌 headless-runner，走 bing 免费引擎链） |
-| 免费链 failover | 无 agy 时自动落到 Bing；tavily key 就绪时融合质量显著提升 |
-| deep_research（bundle） | 单轮 18s：tokio v1.53.1 结论 + 跨源佐证 + gaps/suggested_queries 完整 |
-| research_parallel（bundle） | 2 子代理并行 53.6s：10 个一手源（changelog/crates.io/GitHub 三处交叉一致） |
-| x_search 超时降级 | 45.09s 精确超时，错误信息明确，不阻塞 |
-| grok json-schema 模式 | 17s 返回 envelope（需要订阅的 X 搜索除外） |
-
-## 架构要点
-
-- bundle 运行在宿主进程：Node fetch / child_process 直用，无沙箱 shell 绕行（对比会话级插件需要 `ctx.shell.run` + 引号处理）
-- patch 层覆盖 `web.searchProvider` 是整个集成的关键：内置 web_search 的 schema/UI 不变，后端换成引擎链
-- X 搜索抄自 [liustack/modsearch](https://github.com/liustack/modsearch)（MIT）：`grok -p --always-approve --json-schema`，`structuredOutput` 为 null 时从 `text` salvage 契约对象
-
-## License
-
-MIT
-
-
-## 安装（DSH 动态插件）
-
-### 一键安装（推荐）
-
-```powershell
-# Windows
-.\install.ps1                 # 交互式配置 key（可回车跳过，用无 key 引擎）
-.\install.ps1 -KeysFile .\my-keys.json
-```
-
-```bash
-# Linux / macOS
-./install.sh
-./install.sh --keys ./my-keys.json
-```
-
-脚本会：校验源码语法 → 生成 key 配置（可选）→ 生成安装指令并复制到剪贴板。
-**最后一步**：把安装指令粘贴给 DSH 助手（DSH 动态插件只能在会话内由助手执行 `cordis_define` 安装，无外部安装通道），助手即完成安装并用 `search_stats` 验证。
-
-### 手动安装
-
-插件本体是一个 Host half 动态 Cordis 插件。启动 DSH 会话后，将 `plugin-host.js` 全文作为 `code.host` 传入：
+Manual installation: start a DSH session and pass the full contents of `plugin-host.js` as `code.host`:
 
 ```text
-cordis_define(kind: "new", idPrefix: "sboost", code: { host: <plugin-host.js 全文> })
+cordis_define(kind: "new", idPrefix: "sboost", code: { host: <full plugin-host.js> })
 cordis_run(pluginId, packageId, mode: "run")
 ```
 
-重启进程后需重新 define/run（动态插件不跨进程存活）；磁盘缓存 `.search-boost-cache.json` 自动复用。
+Dynamic plugins do not survive a process restart — re-define/run after restarting; the disk cache `.search-boost-cache.json` is reused automatically.
 
-## 配置（API Key）
+## Configuration (API keys)
 
-发布版**不含任何密钥**，引擎 key 从以下来源按序加载：
+The published bundle contains **no secrets**. The bundle runs in the host process and loads keys from the following sources in order:
 
-1. **配置文件**（推荐）：工作区下 `.search-boost-keys.json` 或 `search-boost-keys.json`：
+1. `~/.dsh-search-boost-keys.json` (recommended) or workspace `./.search-boost-keys.json`:
 
 ```json
 {
@@ -131,32 +77,43 @@ cordis_run(pluginId, packageId, mode: "run")
 }
 ```
 
-2. **环境变量**回退：`TAVILY_API_KEY` / `EXA_API_KEY` / `BRAVE_API_KEY`
+2. Environment variable fallback: `TAVILY_API_KEY` / `EXA_API_KEY` / `BRAVE_API_KEY`
 
-缺 key 的引擎自动从可用列表剔除；`bing`（HTML 抓取）与 `deepseek`（DSH 原生 web 服务）无需 key，永远可用。
+Engines without a key are automatically dropped from the chain. **Free engines need no configuration at all**: Antigravity CLI (macOS/Linux — install once, sign in once in the browser) and Bing (zero-config) work out of the box. X search requires Grok Build installed locally and signed in (SuperGrok / X Premium subscription).
 
-## 实测基准（2026-08，主会话）
+## Verified benchmarks (2026-08, Windows + headless)
 
-| 场景 | 数据 |
+| Scenario | Result |
 |---|---|
-| fused_search 冷缓存（medium） | 1.5–3.1s，6 结果，官方源居首（x.ai 3.73 分跨引擎共现） |
-| fused_search 热缓存 | **8ms** |
-| deep_research 单轮 | ~9.1s 收敛，学术级来源（WUSTL / Stony Brook 论文、Springer） |
-| research_parallel | 3 子代理并行 74.8s，18 合并来源，跨域佐证（RustSec 通告 + crates.io 一手 API） |
-| 引擎错误 | 0 |
+| `dsh plugin add` install + patch layer applied | ✓ (`dump-config` confirms `searchProvider` rewritten + plugin row inserted) |
+| Headless end-to-end `web_search` | ✓ (headless-runner embedded in profile, runs on the free Bing chain) |
+| Free-chain failover | Falls back to Bing automatically when `agy` is missing; fused quality improves significantly with a Tavily key |
+| `deep_research` (bundle) | 18s per round: tokio v1.53.1 conclusion + cross-source corroboration + complete gaps/suggested_queries |
+| `research_parallel` (bundle) | 2 subagents in parallel, 53.6s: 10 first-party sources (changelog / crates.io / GitHub cross-consistent) |
+| `x_search` timeout degradation | Precise 45.09s timeout, clear error message, non-blocking |
+| grok json-schema mode | 17s envelope response (except X search, which needs a subscription) |
 
-## 架构要点与踩坑（Windows 沙箱）
+## Architecture notes
 
-- 动态 Host 沙箱无 `fetch`/`process`/`URL`：HTTP 经 `ctx.shell.run` 跑 curl，POST body 用 `-d '<单引号 JSON>'`（`@file`/`stdin`/`cmd.exe` 路径在插件 shell 会被引号解析破坏）
-- `shell.resolve` 与 `fs.writeText` 必须显式传会话 `sandboxPolicy`（镜像 dsh-tool-pwsh 的解析方式），否则 executor 默认受限模式拒跑
-- 工具 value schema 严格：property 级 `required: true`、object 需显式 `additionalProperties`、null 字段省略
-- 主动搜索守则与工具会自动传播给 subagent（实测子代理无指示自动完成 fused_search × 2 + fetch_page × 8 深研链）
+- The bundle runs in the **host process**: Node `fetch` / `child_process` directly, no sandboxed-shell workarounds (contrast: the session-level plugin needs `ctx.shell.run` + quoting care).
+- Patching `web.searchProvider` is the key integration: the built-in `web_search` keeps its schema/UI unchanged; only the backend is swapped for the engine chain.
+- X search is adapted from [liustack/modsearch](https://github.com/liustack/modsearch) (MIT): `grok -p --always-approve --json-schema`, salvaging the contract object from `text` when `structuredOutput` is null.
 
-## 文件
+## Files
 
 ```
-plugin-host.js              — 插件完整源码（cordis_define 的 code.host）
-search-boost-keys.example.json — key 配置文件示例
+index.js                    — bundle plugin entry (provider + tool registration + policy injection)
+lib/engines.js              — key loading + engine chain with failover
+lib/fusion.js               — fused scoring / cache
+lib/fetch.js                — Jina Reader + local fallback + focus extraction
+lib/grok.js                 — X (Twitter) search via Grok Build CLI
+lib/research.js             — deep_research round + research_parallel fan-out
+lib/policy.js               — proactive-search policy section text
+cordis.patch.yml            — patch layer (web.searchProvider + plugin row)
+package.json                — bundle manifest (dsh.bundle.patch)
+install.ps1 / install.sh    — one-command install scripts
+search-boost-keys.example.json — key file example
+plugin-host.js              — alternative session-level dynamic plugin (full source)
 ```
 
 ## License
