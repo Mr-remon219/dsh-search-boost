@@ -1,0 +1,13 @@
+# 密钥（绝不提交）
+.search-boost-keys.json
+search-boost-keys.json
+
+# 运行时缓存与临时文件
+.search-boost-cache.json
+.search-boost-body.json
+.search-boost-cmd.cmd
+install-prompt.txt
+
+# 系统
+.DS_Store
+Thumbs.db
