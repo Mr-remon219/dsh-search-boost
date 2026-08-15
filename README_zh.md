@@ -39,7 +39,7 @@ dsh plugin --profile web add git+file:///path/to/repo # 本地 git 源（协议�
 
 装完重启 `dsh --profile web` 即用：内置 `web_search` 走本插件引擎链，`fused_search` / `fetch_page` / `x_search` / `deep_research` / `research_parallel` / `search_stats` 全部注册。git 源安装协议已实测通过（pnpm 拉取 → patch 层生效 → 端到端可用）。
 
-### 排查：「未找到 dsh CLI」
+### 排查：缺 `dsh` 或缺 `pnpm`
 
 DSH 官方推荐 `npx @deepseek-ai/dsh web` 运行，**不会产生全局 `dsh` 命令**，安装脚本因此检测不到。脚本现在会自动探测 npx 缓存（`%LOCALAPPDATA%\npm-cache\_npx\*` / `~/.npm/_npx/*`）和 npm 全局前缀，通常开箱即过。若仍失败，任选其一：
 
@@ -51,6 +51,14 @@ DSH 官方推荐 `npx @deepseek-ai/dsh web` 运行，**不会产生全局 `dsh` 
    ```sh
    npx --yes @deepseek-ai/dsh plugin --profile web add <本仓库路径>
    ```
+
+`dsh plugin add` 还需要 **pnpm**（dsh 用它解析 bundle 依赖）。脚本会检查 pnpm，若已装但不在 PATH（例如装完没重开终端），会自动把 npm 全局目录注入当前会话的 PATH；若确实没装：
+
+```sh
+npm install -g pnpm
+# 或用 corepack：
+corepack enable && corepack prepare pnpm@latest --activate
+```
 
 ```sh
 dsh --profile web --dump-config   # web.searchProvider 应为 dsh-search-boost

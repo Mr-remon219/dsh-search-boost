@@ -65,7 +65,35 @@ if [[ -z "$DSH" ]]; then
 EOF
   exit 1
 fi
+
+# 1b. 检测 pnpm（dsh plugin add 的硬依赖，dsh 用它解析 bundle 依赖）
+PNPM="$(command -v pnpm 2>/dev/null || true)"
+if [[ -z "$PNPM" ]]; then
+  # npm 全局已装 pnpm 但不在 PATH（例如装完没重开终端）→ 自动注入本会话 PATH
+  PREFIX="$(npm prefix -g 2>/dev/null || true)"
+  if [[ -n "$PREFIX" && -f "$PREFIX/bin/pnpm" ]]; then
+    export PATH="$PREFIX/bin:$PATH"
+    PNPM="$(command -v pnpm 2>/dev/null || true)"
+    echo "[注] pnpm 不在 PATH，已自动加入 npm 全局目录: $PREFIX/bin"
+  fi
+fi
+if [[ -z "$PNPM" ]]; then
+  cat <<EOF
+
+错误: 未找到 pnpm（dsh plugin add 的硬依赖，用于解析 bundle 依赖）。
+请先安装，装完重开终端后重新运行本脚本：
+
+  1) 通过 npm 全局安装（推荐）：
+     npm install -g pnpm
+
+  2) 如果用 corepack 管理：
+     corepack enable
+     corepack prepare pnpm@latest --activate
+EOF
+  exit 1
+fi
 echo "[1/3] dsh CLI: $DSH"
+echo "      pnpm: $PNPM"
 
 if command -v node >/dev/null 2>&1; then
   echo "[2/3] 校验源码语法 ..."

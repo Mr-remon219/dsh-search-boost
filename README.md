@@ -39,7 +39,7 @@ Or run the install script from the repo (syntax check → key setup → install 
 
 After installing, restart `dsh --profile web`. The built-in `web_search` now runs on this plugin's engine chain, and `fused_search` / `fetch_page` / `x_search` / `deep_research` / `research_parallel` / `search_stats` are all registered. The git-source install protocol has been verified end to end (pnpm fetch → patch layer applied → usable).
 
-### Troubleshooting: "dsh CLI not found"
+### Troubleshooting: missing `dsh` or `pnpm`
 
 The official way to run DSH is `npx @deepseek-ai/dsh web`, which leaves **no global `dsh` command** — the install script can't see it. The script now auto-detects the npx cache (`%LOCALAPPDATA%\npm-cache\_npx\*` / `~/.npm/_npx/*`) and npm global prefix, so this usually just works. If it still fails, either:
 
@@ -51,6 +51,14 @@ The official way to run DSH is `npx @deepseek-ai/dsh web`, which leaves **no glo
    ```sh
    npx --yes @deepseek-ai/dsh plugin --profile web add <path-to-this-repo>
    ```
+
+`dsh plugin add` also needs **pnpm** (DSH uses it to resolve bundle dependencies). The script checks for it and auto-adds the npm global dir to the current session's `PATH` when pnpm was installed but isn't on it. If pnpm is genuinely missing:
+
+```sh
+npm install -g pnpm
+# or, with corepack:
+corepack enable && corepack prepare pnpm@latest --activate
+```
 
 ```sh
 dsh --profile web --dump-config   # web.searchProvider should be dsh-search-boost

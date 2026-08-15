@@ -65,7 +65,42 @@ if (-not $dsh) {
 "@
   exit 1
 }
+
+# 1b. 检测 pnpm（dsh plugin add 的硬依赖，dsh 用它解析 bundle 依赖）
+$npmPrefix = $null
+try { $npmPrefix = & npm prefix -g 2>$null } catch {}
+$pnpm = Get-Command pnpm -ErrorAction SilentlyContinue
+if (-not $pnpm) {
+  # npm 全局已装 pnpm 但不在 PATH（例如装完没重开终端）→ 自动注入本会话 PATH
+  if ($npmPrefix) {
+    foreach ($n in @("pnpm.cmd", "pnpm.ps1", "pnpm")) {
+      $p = Join-Path $npmPrefix $n
+      if (Test-Path $p) {
+        $env:PATH = "$npmPrefix;$env:PATH"
+        $pnpm = Get-Command pnpm -ErrorAction SilentlyContinue
+        Write-Host "[注] pnpm 不在 PATH，已自动加入 npm 全局目录: $npmPrefix" -ForegroundColor Yellow
+        break
+      }
+    }
+  }
+}
+if (-not $pnpm) {
+  Write-Error @"
+未找到 pnpm（dsh plugin add 的硬依赖，用于解析 bundle 依赖）。
+请先安装，装完重开终端后重新运行本脚本：
+
+  1) 通过 npm 全局安装（推荐）：
+     npm install -g pnpm
+
+  2) 如果用 corepack 管理：
+     corepack enable
+     corepack prepare pnpm@latest --activate
+"@
+  exit 1
+}
+
 Write-Host "[1/3] dsh CLI: $dsh" -ForegroundColor Green
+Write-Host "      pnpm: $($pnpm.Source)" -ForegroundColor Green
 
 # 2. 语法校验（node 存在时）
 $node = Get-Command node -ErrorAction SilentlyContinue
