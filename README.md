@@ -19,15 +19,21 @@ A bundle plugin for DeepSeek Harness: multi-engine fused search (free-by-default
 
 ## 安装（bundle，推荐）
 
-```sh
-# 从本地目录
-dsh plugin --profile web add ./dsh-search-boost
+**一条命令**（发布后，或本地 git 源）：
 
-# 或从 GitHub（发布后）
-dsh plugin add github:<你的用户名>/dsh-search-boost
+```sh
+dsh plugin add github:<你的用户名>/dsh-search-boost   # 发布后
+dsh plugin --profile web add git+file:///path/to/repo # 本地 git 源（协议已实测）
 ```
 
-首次使用会初始化 profile 并 pnpm 链接本包。验证：
+或者直接运行仓库内的安装脚本（含校验/配置/安装/验证）：
+
+```powershell
+.\install.ps1          # Windows（默认装进 profile "web"）
+./install.sh           # Linux / macOS
+```
+
+装完重启 `dsh --profile web` 即用：内置 `web_search` 走本插件引擎链，`fused_search` / `fetch_page` / `x_search` / `deep_research` / `research_parallel` / `search_stats` 全部注册。git 源安装协议已实测通过（pnpm 拉取 → 层生效 → 端到端可用）。
 
 ```sh
 dsh --profile web --dump-config   # web.searchProvider 应为 dsh-search-boost
