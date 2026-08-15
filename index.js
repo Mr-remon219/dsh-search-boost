@@ -81,6 +81,8 @@ function registerFusedSearchTool(ctx, engines) {
     name: 'fused_search',
     description:
       'Multi-engine fused web search (Antigravity CLI free → Bing → Tavily → Brave → Exa, parallel where possible). ' +
+      'CALL THIS BEFORE ANSWERING any fact that may be stale or external to the conversation: versions, release dates, ' +
+      'current status, prices, API changes, benchmarks, comparisons, or anything quoted from another source — do not answer from memory. ' +
       'Beyond a trivial one-line lookup, prefer this over web_search: it runs query variants across engines, dedupes URLs, ' +
       'cross-ranks with per-engine provenance, applies include/exclude domain filters, recency decay, and caches results (6h TTL). ' +
       'Supports Grok-style queries: site:domain, -site:domain, "phrase", A OR B. For time-sensitive facts pass recency="day|week|month|year".',
