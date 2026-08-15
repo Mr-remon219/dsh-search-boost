@@ -25,7 +25,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/your-name/dsh-search-boost.git"
+    "url": "git+https://github.com/Mr-remon219/dsh-search-boost.git"
   },
   "engines": {
     "node": ">=22.13"

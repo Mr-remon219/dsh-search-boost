@@ -22,7 +22,7 @@ A bundle plugin for DeepSeek Harness: multi-engine fused search (free-by-default
 **一条命令**（发布后，或本地 git 源）：
 
 ```sh
-dsh plugin add github:<你的用户名>/dsh-search-boost   # 发布后
+dsh plugin add github:Mr-remon219/dsh-search-boost   # 发布后
 dsh plugin --profile web add git+file:///path/to/repo # 本地 git 源（协议已实测）
 ```
 
