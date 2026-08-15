@@ -658,14 +658,31 @@ return {
         })
         .sort((a, b) => b.score - a.score)
 
-      const minScore = opts.minScore ?? 0
+      // 借鉴 xai-org/x-algorithm（Apache-2.0，X For You 推荐算法）：
+      //   - repeated-author decay → repeated-domain decay：同域名第 2 条 ×0.7 平滑衰减（而非硬剪），多样性优先
+      //   - out-of-network discount → 单引擎来源 ×0.9（跨引擎共现已加分，单引擎来源视为"圈外"降权）
+      const REPEATED_DOMAIN_DECAY = 0.7
+      const SINGLE_ENGINE_DISCOUNT = 0.9
       const perDomain = new Map()
-      const capped = []
+      const discounted = []
       for (const r of ranked) {
-        if (r.score < minScore) continue
+        let s = r.score
+        if (r.engines.length <= 1) s *= SINGLE_ENGINE_DISCOUNT
         const n = perDomain.get(r.domain) ?? 0
-        if (n >= maxPerDomain) continue
+        if (n > 0) s *= Math.pow(REPEATED_DOMAIN_DECAY, n)
         perDomain.set(r.domain, n + 1)
+        discounted.push({ ...r, score: Math.round(s * 100) / 100 })
+      }
+      discounted.sort((a, b) => b.score - a.score)
+
+      const minScore = opts.minScore ?? 0
+      const capped = []
+      const cappedDomains = new Map()
+      for (const r of discounted) {
+        if (r.score < minScore) continue
+        const n = cappedDomains.get(r.domain) ?? 0
+        if (n >= maxPerDomain) continue
+        cappedDomains.set(r.domain, n + 1)
         capped.push(r)
         if (capped.length >= maxResults) break
       }
