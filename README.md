@@ -4,7 +4,7 @@
 
 A **bundle plugin** for DSH that upgrades the built-in `web_search` and registers a family of search tools:
 
-- Free-by-default engine chain: **Antigravity CLI → Bing** with keyed **Tavily → Brave → Exa** failover.
+- Free-by-default engines run **in parallel**: **Antigravity CLI / Bing / DuckDuckGo** (all keyless), with keyed **Tavily / Brave / Exa** joining when keys are present.
 - Fused multi-engine ranking with cross-engine co-occurrence scoring and time-decay freshness.
 - Deep research driven by the main agent, and parallel research fanned out to native DSH subagents.
 
@@ -13,7 +13,7 @@ A **bundle plugin** for DSH that upgrades the built-in `web_search` and register
 | Capability | Description |
 |---|---|
 | **Built-in `web_search` upgrade** | Registers a `WebSearchProvider` and patches `searchProvider`, so the built-in `web_search` runs on this plugin's free-first engine chain (native citation cards preserved) |
-| `fused_search` | Multi-engine fused retrieval: free engines first (Antigravity CLI → Bing), keyed engines fail over (Tavily → Brave → Exa). Complexity routing, Grok-style query preprocessing (`site:` / `OR` / quotes), hard domain filters, half-life time-decay freshness, cross-engine co-occurrence scoring, 6h TTL cache |
+| `fused_search` | Multi-engine fused retrieval: free engines run **in parallel** (Antigravity CLI / Bing / DuckDuckGo — all keyless, two are plain curl scrapes), keyed engines join when keys exist (Tavily / Brave / Exa). Complexity routing, Grok-style query preprocessing (`site:` / `OR` / quotes), hard domain filters, half-life time-decay freshness, cross-engine co-occurrence scoring, 6h TTL cache |
 | `x_search` | X/Twitter search via the local Grok Build CLI (`~/.grok/auth.json` login state). Returns structured evidence (summary + posts + uncertainty); degrades gracefully after a 45s timeout when there is no subscription, never blocks the call |
 | `fetch_page` | Jina Reader content extraction + local HTML fallback + `focus`-based topic extraction (saves ~90% tokens) + 24h cache |
 | `deep_research` | Step-mode deep research: complex fused search + coverage analysis + cross-domain corroboration stats + gaps + suggested queries, **driven by the main agent in rounds until convergence** |
@@ -100,7 +100,7 @@ The published bundle contains **no secrets**. The bundle runs in the host proces
 
 2. Environment variable fallback: `TAVILY_API_KEY` / `EXA_API_KEY` / `BRAVE_API_KEY`
 
-Engines without a key are automatically dropped from the chain. **Free engines need no configuration at all**: Antigravity CLI (macOS/Linux — install once, sign in once in the browser) and Bing (zero-config) work out of the box. X search requires Grok Build installed locally and signed in (SuperGrok / X Premium subscription).
+Engines without a key are automatically dropped from the fan-out. **Free engines need no configuration at all**: Antigravity CLI (macOS/Linux — install once, sign in once in the browser), Bing (zero-config) and DuckDuckGo (zero-config) work out of the box, and the keyless ones run in parallel so a single-engine failure never leaves you empty-handed. X search requires Grok Build installed locally and signed in (SuperGrok / X Premium subscription).
 
 ## Verified benchmarks (2026-08, Windows + headless)
 
@@ -108,7 +108,7 @@ Engines without a key are automatically dropped from the chain. **Free engines n
 |---|---|
 | `dsh plugin add` install + patch layer applied | ✓ (`dump-config` confirms `searchProvider` rewritten + plugin row inserted) |
 | Headless end-to-end `web_search` | ✓ (headless-runner embedded in profile, runs on the free Bing chain) |
-| Free-chain failover | Falls back to Bing automatically when `agy` is missing; fused quality improves significantly with a Tavily key |
+| No-key parallel fan-out | Zero keys, simple tier: bing + DuckDuckGo run in parallel (measured 1.7s, 6 fused hits, 0 engine errors); agy joins where installed; quality improves further with keyed engines |
 | `deep_research` (bundle) | 18s per round: tokio v1.53.1 conclusion + cross-source corroboration + complete gaps/suggested_queries |
 | `research_parallel` (bundle) | 2 subagents in parallel, 53.6s: 10 first-party sources (changelog / crates.io / GitHub cross-consistent) |
 | `x_search` timeout degradation | Precise 45.09s timeout, clear error message, non-blocking |
