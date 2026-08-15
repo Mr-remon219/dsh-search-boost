@@ -141,3 +141,7 @@ plugin-host.js              — 备选会话级动态插件（完整源码）
 ## License
 
 MIT
+
+## 友链
+
+- [Linux.do](https://linux.do/) — 开源技术社区
