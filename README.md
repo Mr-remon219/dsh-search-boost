@@ -109,6 +109,8 @@ Engines without a key are automatically dropped from the fan-out. **Free engines
 | `dsh plugin add` install + patch layer applied | ✓ (`dump-config` confirms `searchProvider` rewritten + plugin row inserted) |
 | Headless end-to-end `web_search` | ✓ (headless-runner embedded in profile, runs on the free Bing chain) |
 | No-key parallel fan-out | Zero keys, simple tier: bing + DuckDuckGo run in parallel (measured 1.7s, 6 fused hits, 0 engine errors); agy joins from the medium tier; quality improves further with keyed engines |
+| SSRF vs Clash TUN fake-ip | Literal 198.18/15 (RFC 2544) targets are blocked; hostname resolution that lands entirely in 198.18/15 is treated as TUN fake-ip and allowed (the TUN device routes to the real host); opt out with `DSH_SEARCH_ALLOW_TUN_FAKEIP=0`. Measured: fetch_page github.com 953ms via Jina on a fake-ip machine |
+| SSRF vs Clash TUN fake-ip | Literal 198.18/15 (RFC 2544) targets are blocked; hostname resolution that lands entirely in 198.18/15 is treated as TUN fake-ip and allowed (the TUN device routes to the real host); opt out with `DSH_SEARCH_ALLOW_TUN_FAKEIP=0`. Measured: fetch_page github.com 953ms via Jina on a fake-ip machine |
 | `deep_research` (bundle) | 18s per round: tokio v1.53.1 conclusion + cross-source corroboration + complete gaps/suggested_queries |
 | `research_parallel` (bundle) | 2 subagents in parallel, 53.6s: 10 first-party sources (changelog / crates.io / GitHub cross-consistent) |
 | `x_search` timeout degradation | Precise 45.09s timeout, clear error message, non-blocking |

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { fetchPage, makePageCache } from '../lib/fetch.js'
-import { isBlockedIp, assertPublicHttpUrl, SsrfError } from '../lib/ssrf.js'
+import { isBlockedIp, isTunFakeIp, assertPublicHttpUrl, SsrfError } from '../lib/ssrf.js'
 import { normalizeUrl, fusedSearch, TIER_ENGINES, searchCacheKey, estimateComplexity } from '../lib/fusion.js'
 import { researchRound, parallelResearch, setTimer } from '../lib/research.js'
 
@@ -22,6 +22,27 @@ describe('P0-1 SSRF', () => {
     assert.equal(isBlockedIp('::1'), true)
     assert.equal(isBlockedIp('::ffff:127.0.0.1'), true)
     assert.equal(isBlockedIp('8.8.8.8'), false)
+  })
+
+  it('classifies TUN fake-ip range and blocks it as a literal target', () => {
+    // RFC 2544 benchmark range used by Clash/mihomo/sing-box TUN fake-ip
+    assert.equal(isTunFakeIp('198.18.0.191'), true)
+    assert.equal(isTunFakeIp('198.19.255.1'), true)
+    assert.equal(isTunFakeIp('10.0.0.1'), false)
+    assert.equal(isTunFakeIp('1.1.1.1'), false)
+    assert.equal(isTunFakeIp('::1'), false)
+    // literal IPs in the range stay blocked — only hostname resolution
+    // into the range gets the TUN carve-out
+    assert.equal(isBlockedIp('198.18.0.1'), true)
+    assert.equal(isBlockedIp('198.19.0.1'), true)
+  })
+
+  it('rejects literal TUN fake-ip URLs but allows TUN hostname resolution', async () => {
+    await assert.rejects(() => assertPublicHttpUrl('http://198.18.0.1/'), SsrfError)
+    await assert.rejects(() => assertPublicHttpUrl('http://198.19.0.1/'), SsrfError)
+    // github.com resolves via Clash TUN fake-ip on this machine and to real
+    // public IPs elsewhere — both must pass the guard
+    await assert.doesNotReject(() => assertPublicHttpUrl('https://github.com/'))
   })
 
   it('rejects localhost and credentialed URLs before any fetch', async () => {
