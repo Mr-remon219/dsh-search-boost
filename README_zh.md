@@ -109,6 +109,7 @@ cordis_run(pluginId, packageId, mode: "run")
 | `dsh plugin add` 安装 + patch 层生效 | ✓（dump-config 确认 searchProvider 改写 + 插件行插入） |
 | headless 端到端 web_search | ✓（profile 内嵌 headless-runner，走 bing 免费引擎链） |
 | 无 key 并行 | simple 档零 key：bing + DuckDuckGo 并行（实测 1.7s，6 条融合结果，0 引擎错误）；agy 从 medium 档加入；keyed 引擎进一步提质 |
+| SSRF 与 Clash TUN fake-ip | 字面量 198.18/15（RFC 2544 基准段）一律拦截；主机名解析整体落入 198.18/15 时视为 TUN fake-ip 放行（真实连接由 TUN 设备路由）；`DSH_SEARCH_ALLOW_TUN_FAKEIP=0` 可关闭豁免。实测：fake-ip 机器上 fetch_page github.com 953ms（Jina） |
 | deep_research（bundle） | 单轮 18s：tokio v1.53.1 结论 + 跨源佐证 + gaps/suggested_queries 完整 |
 | research_parallel（bundle） | 2 子代理并行 53.6s：10 个一手源（changelog/crates.io/GitHub 三处交叉一致） |
 | x_search 超时降级 | 45.09s 精确超时，错误信息明确，不阻塞 |
