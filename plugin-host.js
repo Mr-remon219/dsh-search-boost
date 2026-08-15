@@ -82,12 +82,13 @@ return {
     const AUTHORITATIVE_TLDS = ['.gov', '.edu', '.mil']
 
     // 复杂度路由（Keiro/Adaptive-RAG 模式）：
-    //   simple  -> 1 查询 × 2 引擎（tavily + bing）
-    //   medium  -> 2 查询 × 3 引擎（+ brave）
+    //   simple  -> 1 查询 × 2-3 引擎（无 key 时 bing + deepseek 原生并行，免费双腿）
+    //   medium  -> 2 查询 × 3-4 引擎（+ brave）
     //   complex -> 3 查询 × 5 引擎（+ exa + deepseek 原生，deepseek 只在第 1 查询跑）
+    // deepseek 是 DSH 原生免费引擎：无 key 时各档仍有 ≥2 个免费引擎并行，不依赖单腿
     const TIER_ENGINES = {
-      simple: ['tavily', 'bing'],
-      medium: ['tavily', 'bing', 'brave'],
+      simple: ['tavily', 'bing', 'deepseek'],
+      medium: ['tavily', 'bing', 'brave', 'deepseek'],
       complex: ['tavily', 'bing', 'brave', 'exa', 'deepseek'],
     }
     const TIER_VARIANTS = { simple: 1, medium: 2, complex: 3 }

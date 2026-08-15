@@ -12,7 +12,7 @@
 // child_process directly — no sandbox shell indirection needed.
 
 import { loadKeys, engineRegistry, runChain, ENGINE_ORDER } from './lib/engines.js'
-import { fusedSearch, makeCache, estimateComplexity } from './lib/fusion.js'
+import { fusedSearch, makeCache, estimateComplexity, TIER_ENGINES } from './lib/fusion.js'
 import { fetchPage, makePageCache } from './lib/fetch.js'
 import { searchX, grokAvailable } from './lib/grok.js'
 import { SEARCH_POLICY_SECTION } from './lib/policy.js'
@@ -146,15 +146,20 @@ function registerFusedSearchTool(ctx, engines) {
       }
       stats.cacheMisses++
       const tier = args.complexity ?? 'auto'
+      // Filter to engines that are actually available (e.g. agy absent on
+      // Windows, keyed engines without keys) so the parallel fan-out only
+      // runs real legs — free legs (bing/ddg) stay, keyed ones join.
+      const resolvedTier = tier === 'auto' ? estimateComplexity(args.query) : tier
+      const engineNames = (args.engines ?? TIER_ENGINES[resolvedTier]).filter((e) => engines[e]?.available())
       const result = await fusedSearch({
         query: args.query,
         queries: args.queries,
-        engines: args.engines,
+        engines: engineNames,
         maxResults,
         includeDomains: args.include_domains,
         excludeDomains: args.exclude_domains,
         recency: args.recency,
-        tier,
+        tier: resolvedTier,
         runOne: async (engineName, q, n, o) => {
           const engine = engines[engineName]
           if (!engine?.available()) throw new Error(`${engineName} unavailable`)
