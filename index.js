@@ -12,7 +12,7 @@
 // child_process directly — no sandbox shell indirection needed.
 
 import { loadKeys, engineRegistry, ENGINE_ORDER } from './lib/engines.js'
-import { fusedSearch, makeCache, estimateComplexity, TIER_ENGINES } from './lib/fusion.js'
+import { fusedSearch, makeCache, estimateComplexity, TIER_ENGINES, searchCacheKey } from './lib/fusion.js'
 import { fetchPage, makePageCache } from './lib/fetch.js'
 import { searchX, grokAvailable } from './lib/grok.js'
 import { SEARCH_POLICY_SECTION } from './lib/policy.js'
@@ -51,6 +51,56 @@ export function apply(ctx, config = {}) {
   }
 }
 
+function availableEngines(engines, names) {
+  return names.filter((e) => engines[e]?.available())
+}
+
+function runEngine(engines, engineName, q, n, o) {
+  const engine = engines[engineName]
+  if (!engine?.available()) throw new Error(`${engineName} unavailable`)
+  return engine.search(q, n, o)
+}
+
+async function runFused(engines, { query, queries, engineList, maxResults, includeDomains, excludeDomains, recency, complexity = 'auto', signal }) {
+  const resolvedTier = complexity === 'auto' ? estimateComplexity(query) : complexity
+  const engineNames = availableEngines(engines, engineList ?? TIER_ENGINES[resolvedTier] ?? TIER_ENGINES.simple)
+  const key = searchCacheKey({
+    query,
+    queries: queries ?? [],
+    engines: engineNames,
+    includeDomains: includeDomains ?? [],
+    excludeDomains: excludeDomains ?? [],
+    recency: recency ?? null,
+    maxResults,
+    tier: resolvedTier,
+  })
+  const cached = SEARCH_CACHE.get(key)
+  if (cached) {
+    stats.cacheHits++
+    stats.recent.unshift({ query, tookMs: 0, results: cached.results.length, cacheHit: true })
+    if (stats.recent.length > 20) stats.recent.pop()
+    return { ...cached, cacheHit: true, tookMs: 0 }
+  }
+  stats.cacheMisses++
+  const result = await fusedSearch({
+    query,
+    queries,
+    engines: engineNames,
+    maxResults,
+    includeDomains,
+    excludeDomains,
+    recency,
+    tier: resolvedTier,
+    signal,
+    runOne: (engineName, q, n, o) => runEngine(engines, engineName, q, n, o),
+  })
+  stats.tierCounts[result.tier] = (stats.tierCounts[result.tier] ?? 0) + 1
+  stats.recent.unshift({ query, tookMs: result.tookMs, results: result.results.length, cacheHit: false })
+  if (stats.recent.length > 20) stats.recent.pop()
+  SEARCH_CACHE.set(key, result)
+  return result
+}
+
 // ---------- web seam provider (powers the built-in web_search) ----------
 
 function registerSearchProvider(ctx, engines) {
@@ -59,23 +109,16 @@ function registerSearchProvider(ctx, engines) {
     available: () => true,
     async search(request, signal) {
       const count = Math.min(request.maxResults ?? 6, 10)
-      // Parallel fan-out over every available free engine (bing + ddg curl
-      // scrapes, agy CLI where installed) instead of a serial failover chain:
-      // one engine failing no longer costs a second round-trip. Reuses the
+      // Parallel fan-out over available engines for the query's complexity
+      // tier (simple = bing+ddg; keyed / agy join on medium+). Shares the
       // same 6h cache as fused_search. NOTE: do not add a deepseek-native
       // engine here — ctx.web.search resolves the configured seam (which is
       // this provider after our patch) and would recurse into itself.
-      const engineNames = TIER_ENGINES.simple.filter((e) => engines[e]?.available())
-      const result = await fusedSearch({
+      const result = await runFused(engines, {
         query: request.query,
         maxResults: count,
-        engines: engineNames,
-        tier: 'simple',
-        runOne: async (engineName, q, n, o) => {
-          const engine = engines[engineName]
-          if (!engine?.available()) throw new Error(`${engineName} unavailable`)
-          return engine.search(q, n, o)
-        },
+        complexity: 'auto',
+        signal,
       })
       if (result.results.length === 0) {
         const errs = Object.entries(result.engineStats)
@@ -83,8 +126,12 @@ function registerSearchProvider(ctx, engines) {
           .map(([k, v]) => `${k}: ${v.note ?? 'error'}`)
         throw new Error(`dsh-search-boost: no engine could answer (${errs.join('; ') || 'all engines unavailable'})`)
       }
+      const summary = result.results.slice(0, 3).map((h, i) => {
+        const when = h.published ? ` (${h.published})` : ''
+        return `${i + 1}. ${h.title} — ${h.domain}${when}`
+      }).join('\n')
       return {
-        content: `[dsh-search-boost] ${result.results.length} sources from ${result.engineStats ? Object.keys(result.engineStats).filter((e) => result.engineStats[e].errors === 0).join('+') : ''}`,
+        content: summary || `[dsh-search-boost] ${result.results.length} sources`,
         sources: result.results.slice(0, count).map((h) => ({
           url: h.url,
           ...(h.title ? { title: h.title } : {}),
@@ -131,6 +178,7 @@ function registerFusedSearchTool(ctx, engines) {
         additionalProperties: false,
         properties: {
           query: { type: 'string' },
+          queriesUsed: { type: 'array', items: { type: 'string' } },
           tier: { type: 'string' },
           engineStats: { type: 'object' },
           results: {
@@ -158,43 +206,18 @@ function registerFusedSearchTool(ctx, engines) {
     },
     timeoutMs: 90000,
     isConcurrencySafe: () => true,
-    async execute(args) {
-      const maxResults = Math.min(args.max_results ?? 6, 10)
-      const key = JSON.stringify({ v: 1, q: args.query, qs: args.queries ?? [], e: args.engines ?? [], id: args.include_domains ?? [], xd: args.exclude_domains ?? [], rec: args.recency ?? null, m: maxResults })
-      const cached = SEARCH_CACHE.get(key)
-      if (cached) {
-        stats.cacheHits++
-        stats.recent.unshift({ query: args.query, tookMs: 0, results: cached.results.length, cacheHit: true })
-        if (stats.recent.length > 20) stats.recent.pop()
-        return { ...cached, cacheHit: true, tookMs: 0 }
-      }
-      stats.cacheMisses++
-      const tier = args.complexity ?? 'auto'
-      // Filter to engines that are actually available (e.g. agy absent on
-      // Windows, keyed engines without keys) so the parallel fan-out only
-      // runs real legs — free legs (bing/ddg) stay, keyed ones join.
-      const resolvedTier = tier === 'auto' ? estimateComplexity(args.query) : tier
-      const engineNames = (args.engines ?? TIER_ENGINES[resolvedTier]).filter((e) => engines[e]?.available())
-      const result = await fusedSearch({
+    async execute(args, exec) {
+      return runFused(engines, {
         query: args.query,
         queries: args.queries,
-        engines: engineNames,
-        maxResults,
+        engineList: args.engines,
+        maxResults: Math.min(args.max_results ?? 6, 10),
         includeDomains: args.include_domains,
         excludeDomains: args.exclude_domains,
         recency: args.recency,
-        tier: resolvedTier,
-        runOne: async (engineName, q, n, o) => {
-          const engine = engines[engineName]
-          if (!engine?.available()) throw new Error(`${engineName} unavailable`)
-          return engine.search(q, n, o)
-        },
+        complexity: args.complexity ?? 'auto',
+        signal: exec?.signal,
       })
-      stats.tierCounts[result.tier] = (stats.tierCounts[result.tier] ?? 0) + 1
-      stats.recent.unshift({ query: args.query, tookMs: result.tookMs, results: result.results.length, cacheHit: false })
-      if (stats.recent.length > 20) stats.recent.pop()
-      SEARCH_CACHE.set(key, result)
-      return result
     },
   })
 }
@@ -250,8 +273,8 @@ function registerFetchPageTool(ctx) {
     },
     timeoutMs: 60000,
     isConcurrencySafe: () => true,
-    async execute(args) {
-      return fetchPage(String(args.url).trim(), args.focus, PAGE_CACHE)
+    async execute(args, exec) {
+      return fetchPage(String(args.url).trim(), args.focus, PAGE_CACHE, exec?.signal)
     },
   })
 }
@@ -393,17 +416,15 @@ function registerDeepResearchTool(ctx, engines) {
     },
     timeoutMs: 120000,
     isConcurrencySafe: () => true,
-    async execute(args) {
+    async execute(args, exec) {
       return researchRound({
         query: args.query,
         queries: args.queries,
         maxSources: Math.min(args.max_sources ?? 8, 12),
         recency: args.recency,
-        runOne: async (engineName, q, n, o) => {
-          const engine = engines[engineName]
-          if (!engine?.available()) throw new Error(`${engineName} unavailable`)
-          return engine.search(q, n, o)
-        },
+        engines: availableEngines(engines, TIER_ENGINES.complex),
+        runOne: (engineName, q, n, o) => runEngine(engines, engineName, q, n, o),
+        signal: exec?.signal,
       })
     },
   })
@@ -539,6 +560,7 @@ function registerStatsTool(ctx) {
         engines: {
           antigravity: await pathExists('agy'),
           bing: true,
+          ddg: true,
           tavily: Boolean(keys.tavily),
           brave: Boolean(keys.brave),
           exa: Boolean(keys.exa),
