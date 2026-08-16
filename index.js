@@ -68,7 +68,7 @@ export function apply(ctx, config = {}) {
   reg('research_parallel', () => { if (config.researchParallel !== false) return registerParallelTool(ctx) })
   reg('search_stats', () => { if (config.searchStats !== false) return registerStatsTool(ctx) })
   reg('policy section', () => ctx.systemPrompt?.section(SEARCH_POLICY_SECTION))
-  reg('search status variable', () => registerStatusVariable(ctx))
+  reg('search status section', () => registerStatusSection(ctx))
   reg('web_change command', () => registerWebChangeCommand(ctx))
   reg('x-login command', () => registerXLoginCommand(ctx))
   reg('x-logout command', () => registerXLogoutCommand(ctx))
@@ -194,20 +194,29 @@ function registerFetchProvider(ctx) {
   })
 }
 
-// ---------- systemPrompt variable: live search status ----------
+// ---------- systemPrompt section: live search status ----------
 
 // One line the model sees in every assembly, so it natively knows the active
 // layer and whether x_search uses the official path or the fallback chain —
 // no tool call needed to decide /web_change or /x-login routing.
-function registerStatusVariable(ctx) {
-  const variable = ctx.systemPrompt?.variable
-  if (typeof variable !== 'function') return undefined
-  // DSH requires variable names to match /^[a-z][a-z0-9_]*$/ (no colons)
-  return variable('search_status', () => {
-    const layer = getLayer()
-    const x = xAuthAvailableSync()
-    const st = authStatus()
-    return `search layer: ${layer}; x_search: ${x ? 'official path' : 'fallback chain'} (${st.source}); /web_change switches the layer, /x-login|/x-logout switch the x_search path`
+//
+// Implemented as a DYNAMIC section (PromptSection.text accepts a function
+// evaluated per assembly) instead of systemPrompt.variable: empirically the
+// variable() registration path throws inside the real DSH host
+// ("Cannot read properties of undefined (reading 'layers')" — the variable
+// registry is agent-scope oriented), while section() — including dynamic
+// text functions — is verified working on a plain host context (assemble
+// renders the per-turn value).
+function registerStatusSection(ctx) {
+  return ctx.systemPrompt?.section({
+    name: 'search:status',
+    order: 116, // right after the search policy section (115)
+    text: () => {
+      const layer = getLayer()
+      const x = xAuthAvailableSync()
+      const st = authStatus()
+      return `search status — layer: ${layer}; x_search: ${x ? 'official path' : 'fallback chain'} (${st.source}); /web_change switches the layer, /x-login|/x-logout switch the x_search path`
+    },
   })
 }
 

@@ -401,7 +401,7 @@ describe('v0.0.5 DSH-native integration', () => {
       },
       tools: { register: (t) => { tools.set(t.name, t); return () => {} } },
       systemPrompt: {
-        section: (s) => { sections.push(s.name); return () => {} },
+        section: (s) => { sections.push(s); return () => {} },
         variable: (name, provider) => { variables.set(name, provider); return () => {} },
       },
       timeout: (ms) => ms,
@@ -438,15 +438,19 @@ describe('v0.0.5 DSH-native integration', () => {
     }
   })
 
-  it('registers a search_status prompt variable with the live layer + x state', async () => {
+  it('registers a live search:status section (dynamic text evaluated per assembly)', async () => {
     const { apply } = await import('../index.js')
     const mock = makeMockCtx()
     apply(mock.ctx, {})
-    const provider = mock.variables.get('search_status')
-    assert.ok(provider, 'search_status variable registered')
-    const line = provider()
-    assert.match(line, /search layer: (free|api)/)
+    const section = mock.sections.find((s) => s.name === 'search:status')
+    assert.ok(section, 'search:status section registered')
+    assert.equal(section.order, 116)
+    assert.equal(typeof section.text, 'function', 'status must be a dynamic per-assembly text function')
+    const line = section.text()
+    assert.match(line, /search status — layer: (free|api)/)
     assert.match(line, /x_search: (official path|fallback chain)/)
+    // evaluated fresh each call
+    assert.ok(section.text().length > 0)
   })
 
   it('search tools declare DSH-native presentation (call views + web result cards)', async () => {
@@ -532,14 +536,20 @@ describe('v0.0.5 DSH-native integration', () => {
     assert.match(out.text, /must start with "xai-"/)
   })
 
-  it('command + variable metadata passes DSH contract validation', async () => {
+  it('command + prompt metadata passes DSH contract validation', async () => {
     const { apply } = await import('../index.js')
     const mock = makeMockCtx()
     apply(mock.ctx, {})
-    // prompt variable names must match /^[a-z][a-z0-9_]*$/ (a colon name
-    // previously made systemPrompt.variable throw at registration)
+    // the status contribution must go through section() (dynamic text), NOT
+    // systemPrompt.variable() — variable() throws in the real DSH host
+    // ("reading 'layers'"); any variable names must still satisfy the pattern
     for (const name of mock.variables.keys()) {
       assert.match(name, /^[a-z][a-z0-9_]*$/, `variable name "${name}" must satisfy the DSH pattern`)
+    }
+    for (const s of mock.sections) {
+      if (s.text !== undefined && typeof s.text !== 'string' && typeof s.text !== 'function') {
+        assert.fail(`section "${s.name}" text must be a string or function`)
+      }
     }
     // command input hints, when present, must be non-empty (an empty hint made
     // commands.register throw for /x-logout)
