@@ -17,7 +17,7 @@ import { loadKeys, engineRegistry, ENGINE_ORDER } from './lib/engines.js'
 import { fusedSearch, makeCache, estimateComplexity, TIER_ENGINES, TIER_ENGINES_FREE, searchCacheKey, hostOf, normalizeUrl } from './lib/fusion.js'
 import { fetchPage, makePageCache } from './lib/fetch.js'
 import { runXTool, xAuthAvailableSync } from './lib/xsearch.js'
-import { fallbackXSearch, hitToPost } from './lib/xfallback.js'
+import { fallbackXSearch, hitToPost, cleanJsonValue } from './lib/xfallback.js'
 import { authStatus, importFromGrok, importApiKey, logout, piAuthPath } from './lib/xauth.js'
 import { SEARCH_POLICY_SECTION } from './lib/policy.js'
 import { researchRound, parallelResearch, setTimer } from './lib/research.js'
@@ -362,7 +362,9 @@ function registerFusedSearchTool(ctx, engines) {
     timeoutMs: 90000,
     isConcurrencySafe: () => true,
     async execute(args, exec) {
-      return runFused(engines, {
+      // DSH validates executed values as lossless JSON — strip any stray
+      // undefined (e.g. optional published dates) before returning
+      return cleanJsonValue(await runFused(engines, {
         query: args.query,
         queries: args.queries,
         engineList: args.engines,
@@ -373,7 +375,7 @@ function registerFusedSearchTool(ctx, engines) {
         complexity: args.complexity ?? 'auto',
         layer: args.layer ?? null,
         signal: exec?.signal,
-      })
+      }))
     },
   })
 }
@@ -457,7 +459,7 @@ function registerFetchPageTool(ctx) {
     timeoutMs: 60000,
     isConcurrencySafe: () => true,
     async execute(args, exec) {
-      return fetchPage(String(args.url).trim(), args.focus, PAGE_CACHE, exec?.signal)
+      return cleanJsonValue(await fetchPage(String(args.url).trim(), args.focus, PAGE_CACHE, exec?.signal))
     },
   })
 }
@@ -574,6 +576,9 @@ function registerXSearchTool(ctx, engines) {
 
       const task = (async () => {
         const remember = (out) => {
+          // DSH validates executed values as lossless JSON — strip stray
+          // undefined (oEmbed/enhancement posts may carry undefined likes etc.)
+          if (Array.isArray(out.items)) out.items = cleanJsonValue(out.items)
           if (out.via !== 'error' && out.results > 0) X_CACHE[kind].set(cacheKey, out)
           return out
         }
@@ -855,7 +860,7 @@ function registerDeepResearchTool(ctx, engines) {
     isConcurrencySafe: () => true,
     async execute(args, exec) {
       const active = args.layer ?? getLayer()
-      return researchRound({
+      return cleanJsonValue(await researchRound({
         query: args.query,
         queries: args.queries,
         maxSources: Math.min(args.max_sources ?? 8, 12),
@@ -863,7 +868,7 @@ function registerDeepResearchTool(ctx, engines) {
         engines: availableEngines(engines, layerTierTable(active).complex),
         runOne: (engineName, q, n, o) => runEngine(engines, engineName, q, n, o),
         signal: exec?.signal,
-      })
+      }))
     },
   })
 }
@@ -946,7 +951,7 @@ function registerParallelTool(ctx) {
     isConcurrencySafe: () => true,
     async execute(args, exec) {
       const subagents = ctx.get('subagents')
-      return parallelResearch({
+      return cleanJsonValue(await parallelResearch({
         query: args.query,
         goal: args.goal,
         subQueries: args.sub_queries,
@@ -955,7 +960,7 @@ function registerParallelTool(ctx) {
         subagents,
         agent: exec.agent,
         signal: exec.signal,
-      })
+      }))
     },
   })
 }
@@ -1088,7 +1093,7 @@ function registerStatsTool(ctx) {
     async execute() {
       const keys = loadKeys()
       const xSource = authStatus()
-      return {
+      return cleanJsonValue({
         startedAt: stats.startedAt,
         layer: getLayer(),
         cacheHits: stats.cacheHits,
@@ -1106,7 +1111,7 @@ function registerStatsTool(ctx) {
         grok: xAuthAvailableSync(),
         x: { official: xAuthAvailableSync(), source: xSource.source },
         recent: stats.recent.slice(0, 10),
-      }
+      })
     },
   })
 }
