@@ -24,7 +24,7 @@ import { researchRound, parallelResearch, setTimer } from './lib/research.js'
 import { getLayer, setLayer, LAYER_LABELS } from './lib/layer.js'
 
 export const name = 'dsh-search-boost'
-export const inject = ['web', 'tools', 'systemPrompt']
+export const inject = ['web', 'tools', 'systemPrompt', 'timer']
 
 const SEARCH_CACHE = makeCache()
 const PAGE_CACHE = makePageCache()
@@ -53,11 +53,14 @@ export function apply(ctx, config = {}) {
       console.error(`[dsh-search-boost] ${label} registration failed:`, err instanceof Error ? err.message : String(err))
     }
   }
-  // DSH/Cordis-native registration: every registration returns an exact
-  // disposer — hand it to ctx.effect so teardown (reload/HMR/dispose) is clean.
+  // Registrations are kept alive for the process lifetime (bundle plugin).
+  // NOTE: do NOT hand registration disposers to ctx.effect — the loader's
+  // entry fiber commits right after apply() and would run every disposer,
+  // silently UNREGISTERING providers/tools/commands/sections. This was
+  // empirically reproduced in the DSH host (direct register → FOUND, then
+  // ctx.effect(disposer) → NULL). Built-in plugins drop the disposer too.
   const reg = (label, fn) => safe(label, () => {
-    const dispose = fn()
-    if (typeof ctx.effect === 'function' && typeof dispose === 'function') ctx.effect(dispose)
+    fn()
   })
   reg('searchProvider', () => { if (config.searchProvider !== false) return registerSearchProvider(ctx, engines) })
   reg('fetchProvider', () => { if (config.fetchProvider !== false) return registerFetchProvider(ctx) })
