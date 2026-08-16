@@ -83,7 +83,7 @@ describe('P0-2 research_parallel budget', () => {
     const result = await parallelResearch({
       query: 'budget-probe',
       maxSeconds: 1,
-      subQueries: ['one-angle'],
+      subQueries: ['angle-a', 'angle-b'],
       subagents,
       agent: {},
     })
@@ -183,7 +183,7 @@ describe('P1-8 / P1-9 / P1-11 / P1-13 wiring', () => {
     assert.equal(/tier: 'simple'/.test(provider), false)
     assert.equal(/runFused\(/.test(provider), true)
     assert.match(provider, /\bsignal\b/)
-    assert.match(indexSrc, /ddg:\s*true/)
+    assert.match(indexSrc, /ddg:\s*engines\.ddg/)
   })
 
   it('forwards abort signal into runOne opts', async () => {

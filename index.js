@@ -16,6 +16,7 @@
 import { loadKeys, engineRegistry, ENGINE_ORDER } from './lib/engines.js'
 import { fusedSearch, makeCache, estimateComplexity, TIER_ENGINES, TIER_ENGINES_FREE, searchCacheKey, hostOf, normalizeUrl } from './lib/fusion.js'
 import { fetchPage, makePageCache } from './lib/fetch.js'
+import { isSsrfError } from './lib/ssrf.js'
 import { runXTool, xAuthAvailableSync } from './lib/xsearch.js'
 import { fallbackXSearch, hitToPost, cleanJsonValue } from './lib/xfallback.js'
 import { authStatus, importFromGrok, importApiKey, logout, piAuthPath } from './lib/xauth.js'
@@ -24,7 +25,7 @@ import { researchRound, parallelResearch, setTimer } from './lib/research.js'
 import { getLayer, setLayer, LAYER_LABELS } from './lib/layer.js'
 
 export const name = 'dsh-search-boost'
-export const inject = ['web', 'tools', 'systemPrompt', 'timer']
+export const inject = ['web', 'tools', 'systemPrompt', 'timer', 'commands']
 
 const SEARCH_CACHE = makeCache()
 const PAGE_CACHE = makePageCache()
@@ -80,7 +81,11 @@ export function apply(ctx, config = {}) {
   reg('x-login command', () => registerXLoginCommand(ctx))
   reg('x-logout command', () => registerXLogoutCommand(ctx))
   try {
-    setTimer((ms) => ctx.timeout(ms))
+    const timer =
+      typeof ctx.timeout === 'function'
+        ? (ms) => ctx.timeout(ms)
+        : ctx.get?.('timer')?.timeout?.bind(ctx.get('timer'))
+    if (typeof timer === 'function') setTimer((ms) => timer(ms))
   } catch (err) {
     console.error('[dsh-search-boost] timer setup failed:', err instanceof Error ? err.message : String(err))
   }
@@ -188,14 +193,19 @@ function registerFetchProvider(ctx) {
     id: 'dsh-search-boost',
     available: () => true,
     async fetch(request, signal) {
-      const page = await fetchPage(request.url, undefined, PAGE_CACHE, signal)
-      // both the Jina and the local path throw on non-2xx, so a successful
-      // fetch is truthfully HTTP 200
-      return {
-        url: page.url,
-        statusCode: 200,
-        body: { kind: 'text', content: page.content },
-        truncated: page.truncated,
+      try {
+        const page = await fetchPage(request.url, undefined, PAGE_CACHE, signal)
+        return {
+          url: page.url,
+          statusCode: 200,
+          body: { kind: 'text', content: page.content },
+          truncated: page.truncated,
+        }
+      } catch (err) {
+        if (isSsrfError(err)) {
+          throw new Error(`dsh-search-boost: ${err instanceof Error ? err.message : String(err)}`)
+        }
+        throw err
       }
     },
   })
@@ -349,7 +359,7 @@ function registerFusedSearchTool(ctx, bumpEngines) {
           ...(r.snippet ? { snippet: r.snippet.slice(0, 300) } : {}),
           ...(r.published ? { publishedAt: r.published } : {}),
         })),
-        truncated: (value.results ?? []).length >= Math.min(Number(args?.max_results ?? 6), 10),
+        truncated: (value.results ?? []).length > Math.min(Number(args?.max_results ?? 6), 10),
       }),
     },
     // DSH-native UI: completed call → native web-result card with citation list
@@ -1074,6 +1084,7 @@ function registerStatsTool(ctx, bumpEngines) {
           tierCounts: { type: 'object' }, engines: { type: 'object' }, grok: { type: 'boolean' },
           x: { type: 'object', additionalProperties: true },
           layer: { type: 'string' },
+          caches: { type: 'object', additionalProperties: true },
           recent: { type: 'array', items: { type: 'object', additionalProperties: true } },
         },
         required: ['startedAt'],
@@ -1107,7 +1118,6 @@ function registerStatsTool(ctx, bumpEngines) {
     isConcurrencySafe: () => true,
     async execute() {
       const engines = bumpEngines()
-      const keys = loadKeys()
       const xSource = authStatus()
       return cleanJsonValue({
         startedAt: stats.startedAt,
@@ -1117,12 +1127,20 @@ function registerStatsTool(ctx, bumpEngines) {
         tierCounts: stats.tierCounts,
         engines: {
           antigravity: engines.antigravity?.available() ?? false,
-          bing: true,
-          ddg: true,
-          'exa-free': true,
-          tavily: Boolean(keys.tavily),
-          brave: Boolean(keys.brave),
-          exa: Boolean(keys.exa),
+          bing: engines.bing?.available() ?? false,
+          ddg: engines.ddg?.available() ?? false,
+          'exa-free': engines['exa-free']?.available() ?? false,
+          tavily: engines.tavily?.available() ?? false,
+          brave: engines.brave?.available() ?? false,
+          exa: engines.exa?.available() ?? false,
+        },
+        caches: {
+          search: SEARCH_CACHE.size(),
+          page: PAGE_CACHE.size(),
+          x_keyword: X_CACHE.keyword.size(),
+          x_semantic: X_CACHE.semantic.size(),
+          x_user: X_CACHE.user.size(),
+          x_thread: X_CACHE.thread.size(),
         },
         grok: xAuthAvailableSync(),
         x: { official: xAuthAvailableSync(), source: xSource.source },

@@ -97,9 +97,10 @@ echo "      pnpm: $PNPM"
 
 if command -v node >/dev/null 2>&1; then
   echo "[2/3] 校验源码语法 ..."
-  for f in index.js lib/engines.js lib/exa-free.js lib/layer.js lib/fusion.js lib/fetch.js lib/xauth.js lib/xsearch.js lib/xfallback.js lib/policy.js; do
-    node --check "$REPO/$f"
+  for f in "$REPO"/lib/*.js; do
+    node --check "$f"
   done
+  node --check "$REPO/index.js"
   echo "      语法 OK"
 fi
 
