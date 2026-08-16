@@ -38,6 +38,8 @@ const X_CACHE = {
   user: makeCache(10 * 60 * 1000),
   thread: makeCache(15 * 60 * 1000),
 }
+// single-flight registry: concurrent identical x_search calls share one run
+const X_INFLIGHT = new Map()
 const stats = { startedAt: new Date().toISOString(), cacheHits: 0, cacheMisses: 0, tierCounts: {}, recent: [] }
 
 export function apply(ctx, config = {}) {
@@ -51,17 +53,25 @@ export function apply(ctx, config = {}) {
       console.error(`[dsh-search-boost] ${label} registration failed:`, err instanceof Error ? err.message : String(err))
     }
   }
-  safe('searchProvider', () => { if (config.searchProvider !== false) registerSearchProvider(ctx, engines) })
-  safe('fused_search', () => { if (config.fusedSearch !== false) registerFusedSearchTool(ctx, engines) })
-  safe('fetch_page', () => { if (config.fetchPage !== false) registerFetchPageTool(ctx) })
-  safe('x_search', () => { if (config.xSearch !== false) registerXSearchTool(ctx, engines) })
-  safe('deep_research', () => { if (config.deepResearch !== false) registerDeepResearchTool(ctx, engines) })
-  safe('research_parallel', () => { if (config.researchParallel !== false) registerParallelTool(ctx) })
-  safe('search_stats', () => { if (config.searchStats !== false) registerStatsTool(ctx) })
-  safe('policy section', () => ctx.systemPrompt?.section(SEARCH_POLICY_SECTION))
-  safe('web_change command', () => registerWebChangeCommand(ctx))
-  safe('x-login command', () => registerXLoginCommand(ctx))
-  safe('x-logout command', () => registerXLogoutCommand(ctx))
+  // DSH/Cordis-native registration: every registration returns an exact
+  // disposer — hand it to ctx.effect so teardown (reload/HMR/dispose) is clean.
+  const reg = (label, fn) => safe(label, () => {
+    const dispose = fn()
+    if (typeof ctx.effect === 'function' && typeof dispose === 'function') ctx.effect(dispose)
+  })
+  reg('searchProvider', () => { if (config.searchProvider !== false) return registerSearchProvider(ctx, engines) })
+  reg('fetchProvider', () => { if (config.fetchProvider !== false) return registerFetchProvider(ctx) })
+  reg('fused_search', () => { if (config.fusedSearch !== false) return registerFusedSearchTool(ctx, engines) })
+  reg('fetch_page', () => { if (config.fetchPage !== false) return registerFetchPageTool(ctx) })
+  reg('x_search', () => { if (config.xSearch !== false) return registerXSearchTool(ctx, engines) })
+  reg('deep_research', () => { if (config.deepResearch !== false) return registerDeepResearchTool(ctx, engines) })
+  reg('research_parallel', () => { if (config.researchParallel !== false) return registerParallelTool(ctx) })
+  reg('search_stats', () => { if (config.searchStats !== false) return registerStatsTool(ctx) })
+  reg('policy section', () => ctx.systemPrompt?.section(SEARCH_POLICY_SECTION))
+  reg('search status variable', () => registerStatusVariable(ctx))
+  reg('web_change command', () => registerWebChangeCommand(ctx))
+  reg('x-login command', () => registerXLoginCommand(ctx))
+  reg('x-logout command', () => registerXLogoutCommand(ctx))
   try {
     setTimer((ms) => ctx.timeout(ms))
   } catch (err) {
@@ -164,10 +174,46 @@ async function domainSearch(engines, { query, maxResults = 5, includeDomains = [
   return out
 }
 
+// ---------- web seam fetch provider (powers the built-in web_fetch) ----------
+
+function registerFetchProvider(ctx) {
+  return ctx.web.registerFetchProvider({
+    id: 'dsh-search-boost',
+    available: () => true,
+    async fetch(request, signal) {
+      const page = await fetchPage(request.url, undefined, PAGE_CACHE, signal)
+      // both the Jina and the local path throw on non-2xx, so a successful
+      // fetch is truthfully HTTP 200
+      return {
+        url: page.url,
+        statusCode: 200,
+        body: { kind: 'text', content: page.content },
+        truncated: page.truncated,
+      }
+    },
+  })
+}
+
+// ---------- systemPrompt variable: live search status ----------
+
+// One line the model sees in every assembly, so it natively knows the active
+// layer and whether x_search uses the official path or the fallback chain —
+// no tool call needed to decide /web_change or /x-login routing.
+function registerStatusVariable(ctx) {
+  const variable = ctx.systemPrompt?.variable
+  if (typeof variable !== 'function') return undefined
+  return variable('search:status', () => {
+    const layer = getLayer()
+    const x = xAuthAvailableSync()
+    const st = authStatus()
+    return `search layer: ${layer}; x_search: ${x ? 'official path' : 'fallback chain'} (${st.source}); /web_change switches the layer, /x-login|/x-logout switch the x_search path`
+  })
+}
+
 // ---------- web seam provider (powers the built-in web_search) ----------
 
 function registerSearchProvider(ctx, engines) {
-  ctx.web.registerSearchProvider({
+  return ctx.web.registerSearchProvider({
     id: 'dsh-search-boost',
     available: () => true,
     async search(request, signal) {
@@ -210,7 +256,7 @@ function registerSearchProvider(ctx, engines) {
 // ---------- fused_search tool ----------
 
 function registerFusedSearchTool(ctx, engines) {
-  ctx.tools.register({
+  return ctx.tools.register({
     name: 'fused_search',
     description:
       'Multi-engine fused web search in parallel (free legs: Antigravity CLI / Bing / DuckDuckGo / Exa MCP — all keyless; ' +
@@ -236,6 +282,13 @@ function registerFusedSearchTool(ctx, engines) {
       },
       required: ['query'],
     },
+    // DSH-native UI: pending tool-call card (kind 'search' → magnifier icon)
+    presentCall: (args) => ({
+      card: 'generic',
+      title: `fused_search: "${String(args?.query ?? '').slice(0, 60)}"`,
+      kind: 'search',
+      rawInput: args?.query,
+    }),
     output: {
       schema: {
         type: 'object',
@@ -269,6 +322,29 @@ function registerFusedSearchTool(ctx, engines) {
         type: 'text',
         text: renderFused(value),
       }],
+      // DSH-native: lossless structured projection for the tool/result event;
+      // presentResult narrows it back into a native web citation card.
+      presentationMeta: (args, value) => ({
+        sources: (value.results ?? []).map((r) => ({
+          url: r.url,
+          ...(r.title ? { title: r.title } : {}),
+          ...(r.snippet ? { snippet: r.snippet.slice(0, 300) } : {}),
+          ...(r.published ? { publishedAt: r.published } : {}),
+        })),
+        truncated: (value.results ?? []).length >= Math.min(Number(args?.max_results ?? 6), 10),
+      }),
+    },
+    // DSH-native UI: completed call → native web-result card with citation list
+    presentResult: (args, result) => {
+      const meta = result.meta
+      if (!meta || !Array.isArray(meta.sources)) return undefined
+      return {
+        card: 'web',
+        kind: 'search',
+        title: `fused_search: ${meta.sources.length} sources`,
+        sources: meta.sources,
+        truncated: Boolean(meta.truncated),
+      }
     },
     timeoutMs: 90000,
     isConcurrencySafe: () => true,
@@ -311,7 +387,7 @@ function renderFused(value) {
 // ---------- fetch_page tool ----------
 
 function registerFetchPageTool(ctx) {
-  ctx.tools.register({
+  return ctx.tools.register({
     name: 'fetch_page',
     description:
       'Fetch and extract the full text content of one URL (Jina Reader markdown first, local HTML extraction fallback for blocked sites like github.com). ' +
@@ -325,6 +401,12 @@ function registerFetchPageTool(ctx) {
       },
       required: ['url'],
     },
+    presentCall: (args) => ({
+      card: 'generic',
+      title: `fetch_page: ${hostOf(String(args?.url ?? '')) || String(args?.url ?? '').slice(0, 60)}`,
+      kind: 'fetch',
+      rawInput: args?.url,
+    }),
     output: {
       schema: {
         type: 'object',
@@ -340,6 +422,24 @@ function registerFetchPageTool(ctx) {
         type: 'text',
         text: `**fetch_page: ${value.url}** — via ${value.via}, ${value.word_count} words, ${value.tookMs}ms${value.cacheHit ? ' (cache)' : ''}${value.truncated ? ' (truncated)' : ''}\n\n${value.content}`,
       }],
+      presentationMeta: (_args, value) => ({
+        url: value.url,
+        via: value.via,
+        statusCode: 200, // both fetch paths throw on non-2xx
+        truncated: Boolean(value.truncated),
+      }),
+    },
+    presentResult: (args, result) => {
+      const meta = result.meta
+      if (!meta || typeof meta.url !== 'string') return undefined
+      return {
+        card: 'web',
+        kind: 'fetch',
+        title: `fetch_page: ${meta.url}`,
+        url: meta.url,
+        statusCode: meta.statusCode ?? 200,
+        truncated: Boolean(meta.truncated),
+      }
     },
     timeoutMs: 60000,
     isConcurrencySafe: () => true,
@@ -354,7 +454,7 @@ function registerFetchPageTool(ctx) {
 const X_MODES = ['keyword', 'semantic', 'user', 'thread']
 
 function registerXSearchTool(ctx, engines) {
-  ctx.tools.register({
+  return ctx.tools.register({
     name: 'x_search',
     description:
       'Search X (Twitter) in real time: posts, users, threads. keyword/semantic run as PARALLEL instant search — the hosted xAI x_search tool ' +
@@ -377,6 +477,11 @@ function registerXSearchTool(ctx, engines) {
         excluded_x_handles: { type: 'array', items: { type: 'string' }, description: 'Hosted-tool handle exclusion (max 20, mutually exclusive with allowed).' },
       },
       required: [],
+    },
+    presentCall: (args) => {
+      const kind = X_MODES.includes(args?.type) ? args.type : 'keyword'
+      const subj = args?.query ?? args?.username ?? args?.post_id ?? ''
+      return { card: 'generic', title: `x_search ${kind}: "${String(subj).slice(0, 60)}"`, kind: 'search', rawInput: subj }
     },
     output: {
       schema: {
@@ -403,6 +508,34 @@ function registerXSearchTool(ctx, engines) {
         type: 'text',
         text: renderX(value),
       }],
+      presentationMeta: (_args, value) => {
+        const sources = []
+        for (const it of value.items ?? []) {
+          const posts = Array.isArray(it.recent_posts) ? it.recent_posts : [it]
+          for (const p of posts) {
+            const text = String(p.text ?? '')
+            const url = p.url ?? (p.id ? `https://x.com/i/status/${p.id}` : '')
+            if (!url) continue
+            sources.push({
+              url,
+              title: (p.author ? `${p.author}${p.username ? ` (@${p.username})` : ''}: ` : '') + text.slice(0, 120),
+              ...(text ? { snippet: text.slice(0, 300) } : {}),
+            })
+          }
+        }
+        return { sources, truncated: false }
+      },
+    },
+    presentResult: (args, result) => {
+      const meta = result.meta
+      if (!meta || !Array.isArray(meta.sources)) return undefined
+      return {
+        card: 'web',
+        kind: 'search',
+        title: `x_search: ${meta.sources.length} posts`,
+        sources: meta.sources,
+        truncated: Boolean(meta.truncated),
+      }
     },
     timeoutMs: 180000,
     isConcurrencySafe: () => true,
@@ -421,108 +554,122 @@ function registerXSearchTool(ctx, engines) {
       })
       const cached = X_CACHE[kind].get(cacheKey)
       if (cached) return { ...cached, cacheHit: true, tookMs: 0 }
-      const remember = (out) => {
-        if (out.via !== 'error' && out.results > 0) X_CACHE[kind].set(cacheKey, out)
-        return out
-      }
+      // single-flight: concurrent identical calls share one execution instead
+      // of stampeding the hosted tool / engines (waiter reports cacheHit)
+      const inFlight = X_INFLIGHT.get(cacheKey)
+      if (inFlight) return inFlight.then((out) => ({ ...out, cacheHit: true, tookMs: 0 }))
 
-      const engineSearch = (q, n) => domainSearch(engines, { query: q, maxResults: n, signal })
-      const webSearch = (q, n) =>
-        engineSearch(q, n).then((hits) => hits.map((h) => ({ title: h.title, url: h.url, snippet: h.snippet, domain: h.domain })))
-
-      // the fallback chain: multi-engine (x.com) + oEmbed; guest GraphQL for user
-      const runFallback = async (primaryErr) => {
-        try {
-          const fb = await fallbackXSearch({
-            type: kind,
-            query: args.query,
-            username: args.username,
-            post_id: args.post_id,
-            limit: maxResults,
-            signal,
-            webSearch,
-          })
-          const items = Array.isArray(fb.data) ? fb.data : [fb.data]
-          return remember({
-            via: `fallback:${fb.via}`,
-            results: items.length,
-            tookMs: Date.now() - started,
-            credential: `fallback:${fb.via}`,
-            note: `primary failed: ${String(primaryErr).slice(0, 200)}`,
-            items,
-          })
-        } catch (fbErr) {
-          const msg = `${String(primaryErr)} | fallback: ${fbErr instanceof Error ? fbErr.message : String(fbErr)}`
-          return { via: 'error', results: 0, tookMs: Date.now() - started, error: msg, items: [] }
+      const task = (async () => {
+        const remember = (out) => {
+          if (out.via !== 'error' && out.results > 0) X_CACHE[kind].set(cacheKey, out)
+          return out
         }
-      }
 
-      // preflight (sync, zero network): no official credentials → straight to
-      // the multi-engine chain instead of waiting on a primary-path timeout
-      if (!xAuthAvailableSync()) {
-        return runFallback('no xAI credentials (official path disabled — /x-login enables it)')
-      }
+        const engineSearch = (q, n) => domainSearch(engines, { query: q, maxResults: n, signal })
+        const webSearch = (q, n) =>
+          engineSearch(q, n).then((hits) => hits.map((h) => ({ title: h.title, url: h.url, snippet: h.snippet, domain: h.domain })))
 
-      // keyword/semantic: PARALLEL instant search — hosted x_search ∥ multi-engine
-      if (kind === 'keyword' || kind === 'semantic') {
-        const engQuery = args.query ?? (args.username ? `from:${args.username}` : subj)
-        const [xOutcome, engOutcome] = await Promise.allSettled([
-          runXTool(
+        // the fallback chain: multi-engine (x.com) + oEmbed; guest GraphQL for user
+        const runFallback = async (primaryErr) => {
+          try {
+            const fb = await fallbackXSearch({
+              type: kind,
+              query: args.query,
+              username: args.username,
+              post_id: args.post_id,
+              limit: maxResults,
+              signal,
+              webSearch,
+            })
+            const items = Array.isArray(fb.data) ? fb.data : [fb.data]
+            return remember({
+              via: `fallback:${fb.via}`,
+              results: items.length,
+              tookMs: Date.now() - started,
+              credential: `fallback:${fb.via}`,
+              note: `primary failed: ${String(primaryErr).slice(0, 200)}`,
+              items,
+            })
+          } catch (fbErr) {
+            const msg = `${String(primaryErr)} | fallback: ${fbErr instanceof Error ? fbErr.message : String(fbErr)}`
+            return { via: 'error', results: 0, tookMs: Date.now() - started, error: msg, items: [] }
+          }
+        }
+
+        // preflight (sync, zero network): no official credentials → straight to
+        // the multi-engine chain instead of waiting on a primary-path timeout
+        if (!xAuthAvailableSync()) {
+          return runFallback('no xAI credentials (official path disabled — /x-login enables it)')
+        }
+
+        // keyword/semantic: PARALLEL instant search — hosted x_search ∥ multi-engine
+        if (kind === 'keyword' || kind === 'semantic') {
+          const engQuery = args.query ?? (args.username ? `from:${args.username}` : subj)
+          const [xOutcome, engOutcome] = await Promise.allSettled([
+            runXTool(
+              {
+                type: kind,
+                query: args.query,
+                username: args.username,
+                post_id: args.post_id,
+                from_date: args.from_date,
+                to_date: args.to_date,
+                allowed_x_handles: args.allowed_x_handles,
+                excluded_x_handles: args.excluded_x_handles,
+                max_results: maxResults,
+              },
+              signal,
+            ),
+            engineSearch(engQuery, maxResults),
+          ])
+          if (xOutcome.status === 'fulfilled') {
+            const xPosts = Array.isArray(xOutcome.value.data) ? xOutcome.value.data : []
+            // engine results supplement: dedupe against x results by id/url
+            const extra = engOutcome.status === 'fulfilled'
+              ? engOutcome.value
+                  .filter((h) => h.title || h.snippet)
+                  .map(hitToPost)
+                  .filter((p) => !xPosts.some((x) => (x.id && p.id && x.id === p.id) || (x.url && p.url && x.url === p.url)))
+              : []
+            const merged = [...xPosts, ...extra]
+            const credential = xOutcome.value.credential + (extra.length ? ' + multi-engine parallel' : '')
+            return remember({
+              via: 'parallel',
+              results: merged.length,
+              tookMs: Date.now() - started,
+              credential,
+              xResults: xPosts.length,
+              engineResults: extra.length,
+              items: merged,
+            })
+          }
+          return runFallback(xOutcome.reason instanceof Error ? xOutcome.reason.message : String(xOutcome.reason))
+        }
+
+        // user/thread: serial primary path, fallback chain on failure
+        try {
+          const res = await runXTool(
             {
               type: kind,
               query: args.query,
               username: args.username,
               post_id: args.post_id,
-              from_date: args.from_date,
-              to_date: args.to_date,
-              allowed_x_handles: args.allowed_x_handles,
-              excluded_x_handles: args.excluded_x_handles,
               max_results: maxResults,
             },
             signal,
-          ),
-          engineSearch(engQuery, maxResults),
-        ])
-        if (xOutcome.status === 'fulfilled') {
-          const xPosts = Array.isArray(xOutcome.value.data) ? xOutcome.value.data : []
-          // engine results supplement: dedupe against x results by id/url
-          const extra = engOutcome.status === 'fulfilled'
-            ? engOutcome.value
-                .filter((h) => h.title || h.snippet)
-                .map(hitToPost)
-                .filter((p) => !xPosts.some((x) => (x.id && p.id && x.id === p.id) || (x.url && p.url && x.url === p.url)))
-            : []
-          const merged = [...xPosts, ...extra]
-          const credential = xOutcome.value.credential + (extra.length ? ' + multi-engine parallel' : '')
-          return remember({
-            via: 'parallel',
-            results: merged.length,
-            tookMs: Date.now() - started,
-            credential,
-            xResults: xPosts.length,
-            engineResults: extra.length,
-            items: merged,
-          })
+          )
+          const items = Array.isArray(res.data) ? res.data : [res.data]
+          return remember({ via: res.credential, results: items.length, tookMs: res.tookMs, credential: res.credential, items })
+        } catch (err) {
+          return runFallback(err instanceof Error ? err.message : String(err))
         }
-        return runFallback(xOutcome.reason instanceof Error ? xOutcome.reason.message : String(xOutcome.reason))
-      }
+      })()
 
-      // user/thread: serial primary path, fallback chain on failure
+      X_INFLIGHT.set(cacheKey, task)
       try {
-        const res = await runXTool(
-          {
-            type: kind,
-            query: args.query,
-            username: args.username,
-            post_id: args.post_id,
-            max_results: maxResults,
-          },
-          signal,
-        )
-        const items = Array.isArray(res.data) ? res.data : [res.data]
-        return remember({ via: res.credential, results: items.length, tookMs: res.tookMs, credential: res.credential, items })
-      } catch (err) {
-        return runFallback(err instanceof Error ? err.message : String(err))
+        return await task
+      } finally {
+        X_INFLIGHT.delete(cacheKey)
       }
     },
   })
@@ -614,7 +761,7 @@ function registerXLogoutCommand(ctx) {
 // ---------- deep_research tool ----------
 
 function registerDeepResearchTool(ctx, engines) {
-  ctx.tools.register({
+  return ctx.tools.register({
     name: 'deep_research',
     description:
       'Step-mode deep research: ONE round of complex fused search + coverage analysis (which query terms each source covers) ' +
@@ -636,6 +783,12 @@ function registerDeepResearchTool(ctx, engines) {
       },
       required: ['query'],
     },
+    presentCall: (args) => ({
+      card: 'generic',
+      title: `deep_research: "${String(args?.query ?? '').slice(0, 60)}"`,
+      kind: 'search',
+      rawInput: args?.query,
+    }),
     output: {
       schema: {
         type: 'object',
@@ -705,7 +858,7 @@ function renderResearch(value) {
 // ---------- research_parallel tool ----------
 
 function registerParallelTool(ctx) {
-  ctx.tools.register({
+  return ctx.tools.register({
     name: 'research_parallel',
     description:
       'Parallel multi-agent research: decompose a question into sub-queries (or take yours), spawn one subagent per sub-query ' +
@@ -724,6 +877,12 @@ function registerParallelTool(ctx) {
       },
       required: ['query'],
     },
+    presentCall: (args) => ({
+      card: 'generic',
+      title: `research_parallel: "${String(args?.query ?? '').slice(0, 60)}"`,
+      kind: 'search',
+      rawInput: args?.query,
+    }),
     output: {
       schema: {
         type: 'object',
@@ -832,7 +991,7 @@ function registerWebChangeCommand(ctx) {
 // ---------- search_stats tool ----------
 
 function registerStatsTool(ctx) {
-  ctx.tools.register({
+  return ctx.tools.register({
     name: 'search_stats',
     description: 'dsh-search-boost audit: cache hits/misses, tier distribution, engine availability, and the most recent searches.',
     parameters: {
@@ -840,6 +999,11 @@ function registerStatsTool(ctx) {
       additionalProperties: false,
       properties: {},
     },
+    presentCall: () => ({
+      card: 'generic',
+      title: 'dsh-search-boost stats',
+      kind: 'other',
+    }),
     output: {
       schema: {
         type: 'object',

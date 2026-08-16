@@ -12,7 +12,7 @@
 
 | 能力 | 说明 |
 |---|---|
-| **内置 web_search 升级** | 注册 `WebSearchProvider` 并 patch 改写 `searchProvider`，内置 `web_search` 直接跑在本插件的免费优先引擎链上（保留原生引用卡片） |
+| **内置 web_search + web_fetch 升级** | 注册 `WebSearchProvider` + `WebFetchProvider` 并 patch 改写 `searchProvider` + `fetchProvider` 两个配置键，内置 `web_search` 直接跑在本插件的免费优先引擎链上、内置 `web_fetch` 跑在 Jina 优先抓取链上（保留原生引用/结果卡片） |
 | `fused_search` | 多引擎融合检索：免费引擎**并行**（Antigravity CLI / Bing / DuckDuckGo / Exa MCP —— 全部无 key），keyed 引擎在配置 key 后加入（Tavily / Brave / Exa）。当前搜索层用 `/web_change` 切换（free=仅无 key 引擎 / api=全池），也支持按次 `layer` 覆盖。复杂度路由、Grok 风格查询预处理、域名硬过滤、半衰期时效衰减、跨引擎共现打分、6h TTL 缓存 |
 | `x_search` | X/Twitter 实时搜索：帖子 / 用户 / 线程。`keyword`/`semantic` 走**并行即时搜索** —— 托管 xAI `x_search` 工具（`/x-login` 导入 grok 登录，或 `XAI_API_KEY`）∥ 融合多引擎（限 x.com）同时跑，结果按 status id/url 去重合并。**零凭据也能用**：多引擎 + oEmbed 全文增强（~2s），用户结构化资料走 X 匿名 guest GraphQL，线程全文走 oEmbed。结果按类型缓存（keyword/semantic 5min、user 10min、thread 15min TTL）。`/x-login` 启用官方路径，`/x-logout` 关闭 |
 | `/x-login` | 把 xAI 凭据导入 `~/.dsh-search-boost-xauth.json` 以启用官方 `x_search` 路径：`/x-login`（无参 = 从你的 grok 登录 `~/.grok/auth.json` 导入）、`/x-login -k <XAI_API_KEY>`（公开 api.x.ai）、`/x-login status`。OIDC token 自动刷新（尽力同步回 grok 文件）；grok CLI 自己的登录永不被改动 |
