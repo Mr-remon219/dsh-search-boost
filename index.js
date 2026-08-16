@@ -245,7 +245,7 @@ function registerSearchProvider(ctx, bumpEngines) {
     available: () => true,
     async search(request, signal) {
       const engines = bumpEngines()
-      const count = Math.min(request.maxResults ?? 6, 10)
+      const count = Math.max(1, Math.min(request.maxResults ?? 6, 10))
       // Parallel fan-out over available engines for the query's complexity
       // tier (simple = bing+ddg+exa-free; agy and keyed engines join on
       // medium+). Shares the same 6h cache as fused_search. NOTE: do not add a deepseek-native
@@ -263,19 +263,19 @@ function registerSearchProvider(ctx, bumpEngines) {
           .map(([k, v]) => `${k}: ${v.note ?? 'error'}`)
         throw new Error(`dsh-search-boost: no engine could answer (${errs.join('; ') || 'all engines unavailable'})`)
       }
-      const summary = result.results.slice(0, 3).map((h, i) => {
+      const summary = result.results.map((h, i) => {
         const when = h.published ? ` (${h.published})` : ''
         return `${i + 1}. ${h.title} — ${h.domain}${when}`
       }).join('\n')
       return {
         content: summary || `[dsh-search-boost] ${result.results.length} sources`,
-        sources: result.results.slice(0, count).map((h) => ({
+        sources: result.results.map((h) => ({
           url: h.url,
           ...(h.title ? { title: h.title } : {}),
-          ...(h.snippet ? { snippet: h.snippet.slice(0, 300) } : {}),
+          ...(h.snippet ? { snippet: h.snippet } : {}),
           ...(h.published ? { publishedAt: h.published } : {}),
         })),
-        truncated: result.results.length > count,
+        truncated: Boolean(result.truncated),
       }
     },
   })
@@ -343,6 +343,7 @@ function registerFusedSearchTool(ctx, bumpEngines) {
           },
           tookMs: { type: 'number' },
           cacheHit: { type: 'boolean' },
+          truncated: { type: 'boolean' },
         },
         required: ['query', 'results'],
       },
@@ -356,10 +357,10 @@ function registerFusedSearchTool(ctx, bumpEngines) {
         sources: (value.results ?? []).map((r) => ({
           url: r.url,
           ...(r.title ? { title: r.title } : {}),
-          ...(r.snippet ? { snippet: r.snippet.slice(0, 300) } : {}),
+          ...(r.snippet ? { snippet: r.snippet } : {}),
           ...(r.published ? { publishedAt: r.published } : {}),
         })),
-        truncated: (value.results ?? []).length > Math.min(Number(args?.max_results ?? 6), 10),
+        truncated: Boolean(value.truncated),
       }),
     },
     // DSH-native UI: completed call → native web-result card with citation list
@@ -384,7 +385,7 @@ function registerFusedSearchTool(ctx, bumpEngines) {
         query: args.query,
         queries: args.queries,
         engineList: args.engines,
-        maxResults: Math.min(args.max_results ?? 6, 10),
+        maxResults: Math.max(1, Math.min(args.max_results ?? 6, 10)),
         includeDomains: args.include_domains,
         excludeDomains: args.exclude_domains,
         recency: args.recency,
