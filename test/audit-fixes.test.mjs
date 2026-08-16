@@ -314,3 +314,58 @@ describe('v0.0.2 exa-free parser', () => {
     assert.equal(hits[0].url, 'https://tokio.rs')
   })
 })
+
+describe('audit follow-ups', () => {
+  it('/web_change show reports layer and engines without ReferenceError', async () => {
+    const { apply } = await import('../index.js')
+    const commands = new Map()
+    const commandsService = { register: (c) => { commands.set(c.name, c); return c } }
+    const ctx = {
+      get: (s) => ({ commands: commandsService, subagents: null }[s]),
+      web: { registerSearchProvider: () => {}, registerFetchProvider: () => {} },
+      tools: { register: () => {} },
+      systemPrompt: { section: () => {} },
+      timeout: (ms) => ms,
+    }
+    apply(ctx, {})
+    const cmd = commands.get('web_change')
+    assert.ok(cmd, 'web_change registered')
+    const out = cmd.handler({ rawInput: 'show' })
+    assert.equal(out.kind, 'success')
+    assert.match(out.text, /current layer:/)
+    assert.match(out.text, /engines available in this layer:/)
+    assert.doesNotMatch(out.text, /engines is not defined/)
+  })
+
+  it('fetch_page reuses cache across trailing-slash URL variants', async () => {
+    const hits = []
+    const orig = globalThis.fetch
+    globalThis.fetch = async (url) => {
+      hits.push(String(url))
+      if (String(url).startsWith('https://r.jina.ai/')) {
+        return new Response('# Title\n\nbody text with enough padding to skip local fallback comfortably\n\nmore text here\n\n', { status: 200 })
+      }
+      return orig(url)
+    }
+    try {
+      const cache = makePageCache()
+      await fetchPage('https://1.1.1.1/doc/', null, cache)
+      const second = await fetchPage('https://1.1.1.1/doc', null, cache)
+      assert.equal(second.cacheHit, true)
+      assert.equal(hits.filter((u) => u.startsWith('https://r.jina.ai/')).length, 1)
+    } finally {
+      globalThis.fetch = orig
+    }
+  })
+
+  it('fusedSearch engineStats marks used only for engines that ran', async () => {
+    const result = await fusedSearch({
+      query: 'probe engines stats',
+      engines: ['bing'],
+      tier: 'simple',
+      runOne: async () => [{ title: 'hit', url: 'https://example.com/a', snippet: 'probe' }],
+    })
+    assert.equal(result.engineStats.bing?.used, true)
+    assert.equal(result.engineStats.ddg, undefined)
+  })
+})
