@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { fallbackXSearch, splitXTitle, hitToPost, parseOEmbedHtml, decodeUserId, parseUser, parseTweets } from '../lib/xfallback.js'
+import { fallbackXSearch, splitXTitle, hitToPost, parseOEmbedHtml, decodeUserId, parseUser, parseTweets, cleanJsonValue } from '../lib/xfallback.js'
 import { buildXSearchPrompt, salvageJson, normalizePosts } from '../lib/xsearch.js'
 import { jwtTier } from '../lib/xauth.js'
 import { SEARCH_POLICY_SECTION } from '../lib/policy.js'
@@ -380,6 +380,32 @@ describe('v0.0.4 wiring regression', () => {
     } finally {
       globalThis.fetch = origFetch
     }
+  })
+})
+
+describe('v0.0.5 lossless-JSON cleanup', () => {
+  it('cleanJsonValue removes undefined from objects and arrays recursively', () => {
+    const cleaned = cleanJsonValue({
+      via: 'engines+oembed',
+      items: [
+        { id: '1', author: undefined, username: undefined, text: 'a', url: 'https://x.com/a/status/1', likes: undefined, media: [] },
+        { id: '2', text: 'b', nested: { views: undefined, ok: true }, list: [undefined, 1, { x: undefined }] },
+      ],
+      note: undefined,
+    })
+    assert.deepEqual(cleaned, {
+      via: 'engines+oembed',
+      items: [
+        { id: '1', text: 'a', url: 'https://x.com/a/status/1', media: [] },
+        { id: '2', text: 'b', nested: { ok: true }, list: [1, {}] },
+      ],
+    })
+    // scalars pass through untouched; undefined root stays undefined
+    assert.equal(cleanJsonValue(42), 42)
+    assert.equal(cleanJsonValue('x'), 'x')
+    assert.equal(cleanJsonValue(undefined), undefined)
+    // falsy but JSON-valid values survive
+    assert.deepEqual(cleanJsonValue({ zero: 0, no: false, empty: '' }), { zero: 0, no: false, empty: '' })
   })
 })
 
