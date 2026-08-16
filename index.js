@@ -43,8 +43,12 @@ const X_INFLIGHT = new Map()
 const stats = { startedAt: new Date().toISOString(), cacheHits: 0, cacheMisses: 0, tierCounts: {}, recent: [] }
 
 export function apply(ctx, config = {}) {
-  const keys = loadKeys()
-  const engines = engineRegistry(keys)
+  let engines = engineRegistry(loadKeys())
+  /** Reload keys from disk/env and rebuild the engine registry (mid-session key edits). */
+  const bumpEngines = () => {
+    engines = engineRegistry(loadKeys())
+    return engines
+  }
 
   const safe = (label, fn) => {
     try {
@@ -62,17 +66,17 @@ export function apply(ctx, config = {}) {
   const reg = (label, fn) => safe(label, () => {
     fn()
   })
-  reg('searchProvider', () => { if (config.searchProvider !== false) return registerSearchProvider(ctx, engines) })
+  reg('searchProvider', () => { if (config.searchProvider !== false) return registerSearchProvider(ctx, bumpEngines) })
   reg('fetchProvider', () => { if (config.fetchProvider !== false) return registerFetchProvider(ctx) })
-  reg('fused_search', () => { if (config.fusedSearch !== false) return registerFusedSearchTool(ctx, engines) })
+  reg('fused_search', () => { if (config.fusedSearch !== false) return registerFusedSearchTool(ctx, bumpEngines) })
   reg('fetch_page', () => { if (config.fetchPage !== false) return registerFetchPageTool(ctx) })
-  reg('x_search', () => { if (config.xSearch !== false) return registerXSearchTool(ctx, engines) })
-  reg('deep_research', () => { if (config.deepResearch !== false) return registerDeepResearchTool(ctx, engines) })
+  reg('x_search', () => { if (config.xSearch !== false) return registerXSearchTool(ctx, bumpEngines) })
+  reg('deep_research', () => { if (config.deepResearch !== false) return registerDeepResearchTool(ctx, bumpEngines) })
   reg('research_parallel', () => { if (config.researchParallel !== false) return registerParallelTool(ctx) })
-  reg('search_stats', () => { if (config.searchStats !== false) return registerStatsTool(ctx) })
+  reg('search_stats', () => { if (config.searchStats !== false) return registerStatsTool(ctx, bumpEngines) })
   reg('policy section', () => ctx.systemPrompt?.section(SEARCH_POLICY_SECTION))
   reg('search status section', () => registerStatusSection(ctx))
-  reg('web_change command', () => registerWebChangeCommand(ctx))
+  reg('web_change command', () => registerWebChangeCommand(ctx, bumpEngines))
   reg('x-login command', () => registerXLoginCommand(ctx))
   reg('x-logout command', () => registerXLogoutCommand(ctx))
   try {
@@ -225,11 +229,12 @@ function registerStatusSection(ctx) {
 
 // ---------- web seam provider (powers the built-in web_search) ----------
 
-function registerSearchProvider(ctx, engines) {
+function registerSearchProvider(ctx, bumpEngines) {
   return ctx.web.registerSearchProvider({
     id: 'dsh-search-boost',
     available: () => true,
     async search(request, signal) {
+      const engines = bumpEngines()
       const count = Math.min(request.maxResults ?? 6, 10)
       // Parallel fan-out over available engines for the query's complexity
       // tier (simple = bing+ddg+exa-free; agy and keyed engines join on
@@ -268,7 +273,7 @@ function registerSearchProvider(ctx, engines) {
 
 // ---------- fused_search tool ----------
 
-function registerFusedSearchTool(ctx, engines) {
+function registerFusedSearchTool(ctx, bumpEngines) {
   return ctx.tools.register({
     name: 'fused_search',
     description:
@@ -362,6 +367,7 @@ function registerFusedSearchTool(ctx, engines) {
     timeoutMs: 90000,
     isConcurrencySafe: () => true,
     async execute(args, exec) {
+      const engines = bumpEngines()
       // DSH validates executed values as lossless JSON — strip any stray
       // undefined (e.g. optional published dates) before returning
       return cleanJsonValue(await runFused(engines, {
@@ -468,7 +474,7 @@ function registerFetchPageTool(ctx) {
 
 const X_MODES = ['keyword', 'semantic', 'user', 'thread']
 
-function registerXSearchTool(ctx, engines) {
+function registerXSearchTool(ctx, bumpEngines) {
   return ctx.tools.register({
     name: 'x_search',
     description:
@@ -510,6 +516,7 @@ function registerXSearchTool(ctx, engines) {
           note: { type: 'string' },
           error: { type: 'string' },
           cacheHit: { type: 'boolean' },
+          inFlight: { type: 'boolean' },
           xResults: { type: 'number' },
           engineResults: { type: 'number' },
           items: {
@@ -561,18 +568,23 @@ function registerXSearchTool(ctx, engines) {
       const subj = args.query ?? args.username ?? args.post_id ?? ''
       if (!subj) throw new Error('x_search: provide query (keyword/semantic/user) or post_id (thread).')
       const maxResults = Math.min(Math.max(args.max_results ?? 5, 1), 10)
+      const engines = bumpEngines()
 
       // per-kind TTL cache: repeated identical queries short-circuit here
       const cacheKey = JSON.stringify({
         kind, q: args.query ?? null, u: args.username ?? null, pid: args.post_id ?? null,
         fd: args.from_date ?? null, td: args.to_date ?? null, m: maxResults,
+        ah: args.allowed_x_handles ?? null,
+        eh: args.excluded_x_handles ?? null,
       })
       const cached = X_CACHE[kind].get(cacheKey)
       if (cached) return { ...cached, cacheHit: true, tookMs: 0 }
       // single-flight: concurrent identical calls share one execution instead
-      // of stampeding the hosted tool / engines (waiter reports cacheHit)
+      // of stampeding the hosted tool / engines
       const inFlight = X_INFLIGHT.get(cacheKey)
-      if (inFlight) return inFlight.then((out) => ({ ...out, cacheHit: true, tookMs: 0 }))
+      if (inFlight) {
+        return inFlight.then((out) => ({ ...out, cacheHit: false, inFlight: true, tookMs: 0 }))
+      }
 
       const task = (async () => {
         const remember = (out) => {
@@ -780,7 +792,7 @@ function registerXLogoutCommand(ctx) {
 
 // ---------- deep_research tool ----------
 
-function registerDeepResearchTool(ctx, engines) {
+function registerDeepResearchTool(ctx, bumpEngines) {
   return ctx.tools.register({
     name: 'deep_research',
     description:
@@ -859,12 +871,14 @@ function registerDeepResearchTool(ctx, engines) {
     timeoutMs: 120000,
     isConcurrencySafe: () => true,
     async execute(args, exec) {
+      const engines = bumpEngines()
       const active = args.layer ?? getLayer()
       return cleanJsonValue(await researchRound({
         query: args.query,
         queries: args.queries,
         maxSources: Math.min(args.max_sources ?? 8, 12),
         recency: args.recency,
+        layer: active,
         engines: availableEngines(engines, layerTierTable(active).complex),
         runOne: (engineName, q, n, o) => runEngine(engines, engineName, q, n, o),
         signal: exec?.signal,
@@ -983,13 +997,14 @@ function renderParallel(value) {
 // api = full pool). Persisted to ~/.dsh-search-boost-layer.json, so the
 // choice survives reloads. Uses the host `commands` service (registered via
 // ctx.commands.register) — the same seam built-in slash commands use.
-function registerWebChangeCommand(ctx) {
+function registerWebChangeCommand(ctx, bumpEngines) {
   const commands = ctx.get('commands')
   if (!commands) {
     console.error('[dsh-search-boost] commands service unavailable — /web_change not registered')
     return
   }
   const show = () => {
+    const engines = bumpEngines()
     const layer = getLayer()
     const keys = loadKeys()
     const names = layer === 'free'
@@ -1036,7 +1051,7 @@ function registerWebChangeCommand(ctx) {
 
 // ---------- search_stats tool ----------
 
-function registerStatsTool(ctx) {
+function registerStatsTool(ctx, bumpEngines) {
   return ctx.tools.register({
     name: 'search_stats',
     description: 'dsh-search-boost audit: cache hits/misses, tier distribution, engine availability, and the most recent searches.',
@@ -1091,6 +1106,7 @@ function registerStatsTool(ctx) {
     timeoutMs: 10000,
     isConcurrencySafe: () => true,
     async execute() {
+      const engines = bumpEngines()
       const keys = loadKeys()
       const xSource = authStatus()
       return cleanJsonValue({
@@ -1100,7 +1116,7 @@ function registerStatsTool(ctx) {
         cacheMisses: stats.cacheMisses,
         tierCounts: stats.tierCounts,
         engines: {
-          antigravity: await pathExists('agy'),
+          antigravity: engines.antigravity?.available() ?? false,
           bing: true,
           ddg: true,
           'exa-free': true,
@@ -1114,28 +1130,4 @@ function registerStatsTool(ctx) {
       })
     },
   })
-}
-
-const pathCache = new Map()
-async function pathExists(bin) {
-  if (pathCache.has(bin)) return pathCache.get(bin)
-  const fs = await import('node:fs')
-  const path = await import('node:path')
-  const pathEnv = process.env.PATH ?? ''
-  const sep = process.platform === 'win32' ? ';' : ':'
-  const exts = process.platform === 'win32' ? ['.exe', '.cmd', '.bat', ''] : ['']
-  let found = false
-  for (const dir of pathEnv.split(sep)) {
-    if (!dir) continue
-    for (const e of exts) {
-      try {
-        fs.statSync(path.join(dir, bin + e))
-        found = true
-        break
-      } catch { /* keep looking */ }
-    }
-    if (found) break
-  }
-  pathCache.set(bin, found)
-  return found
 }
