@@ -4,7 +4,7 @@
 
 一个面向 DSH 的 **bundle 插件**：升级内置 `web_search`，并注册一整套搜索工具：
 
-- 免费引擎**并行**：**Antigravity CLI / Bing / DuckDuckGo**（全部无 key），keyed 引擎 **Tavily / Brave / Exa** 在配置 key 后加入。
+- 免费引擎**并行**：**Antigravity CLI / Bing / DuckDuckGo / Exa MCP（exa-free）**（全部无 key），keyed 引擎 **Tavily / Brave / Exa** 在配置 key 后加入。
 - 融合排序：跨引擎共现打分 + 半衰期时效衰减。
 - 由主 agent 驱动的深度研究，以及扇出到 DSH 原生 subagent 的并行研究。
 
@@ -13,7 +13,7 @@
 | 能力 | 说明 |
 |---|---|
 | **内置 web_search 升级** | 注册 `WebSearchProvider` 并 patch 改写 `searchProvider`，内置 `web_search` 直接跑在本插件的免费优先引擎链上（保留原生引用卡片） |
-| `fused_search` | 多引擎融合检索：免费引擎**并行**（Antigravity CLI / Bing / DuckDuckGo —— 全部无 key，其中两个是纯 curl 抓取），keyed 引擎在配置 key 后加入（Tavily / Brave / Exa）。复杂度路由、Grok 风格查询预处理（`site:` / `OR` / 引号）、域名硬过滤、半衰期时效衰减、跨引擎共现打分、6h TTL 缓存 |
+| `fused_search` | 多引擎融合检索：免费引擎**并行**（Antigravity CLI / Bing / DuckDuckGo / Exa MCP —— 全部无 key），keyed 引擎在配置 key 后加入（Tavily / Brave / Exa）。当前搜索层用 `/web_change` 切换（free=仅无 key 引擎 / api=全池），也支持按次 `layer` 覆盖。复杂度路由、Grok 风格查询预处理、域名硬过滤、半衰期时效衰减、跨引擎共现打分、6h TTL 缓存 |
 | `x_search` | X/Twitter 搜索：通过本地 Grok Build CLI 借道（`~/.grok/auth.json` 登录态），返回结构化证据（summary + 帖子列表 + 不确定性）；无订阅时 45s 超时降级，不阻塞调用 |
 | `fetch_page` | Jina Reader 正文抓取 + 本地 HTML 回退 + `focus` 定向提取（省 ~90% token）+ 24h 缓存 |
 | `deep_research` | step 模式深研：complex 融合检索 + 覆盖度分析 + 跨域佐证统计 + 缺口 + 建议查询，**由主 agent 驱动多轮直至收敛** |
@@ -100,7 +100,7 @@ cordis_run(pluginId, packageId, mode: "run")
 
 2. 环境变量回退：`TAVILY_API_KEY` / `EXA_API_KEY` / `BRAVE_API_KEY`
 
-缺 key 的引擎自动从并行列表剔除。**免费引擎无需任何配置**：Antigravity CLI（macOS/Linux 装一次、浏览器登录一次）、Bing（零配置）、DuckDuckGo（零配置）开箱即用，且无 key 引擎并行运行——单个引擎失败不会让你空手而归。X 搜索需要本机装有 Grok Build 且已登录（SuperGrok / X Premium 订阅）。
+缺 key 的引擎自动从并行列表剔除。**免费引擎无需任何配置**：Antigravity CLI（macOS/Linux 装一次、浏览器登录一次）、Bing、DuckDuckGo、Exa MCP（exa-free）开箱即用，且无 key 引擎并行运行——单个引擎失败不会让你空手而归。`free` 层只调无 key 引擎，`api` 层加入配置了 key 的 Tavily / Brave / Exa。X 搜索需要本机装有 Grok Build 且已登录（SuperGrok / X Premium 订阅）。
 
 ## 实测基准（2026-08，Windows + headless）
 
@@ -108,7 +108,7 @@ cordis_run(pluginId, packageId, mode: "run")
 |---|---|
 | `dsh plugin add` 安装 + patch 层生效 | ✓（dump-config 确认 searchProvider 改写 + 插件行插入） |
 | headless 端到端 web_search | ✓（profile 内嵌 headless-runner，走 bing 免费引擎链） |
-| 无 key 并行 | simple 档零 key：bing + DuckDuckGo 并行（实测 1.7s，6 条融合结果，0 引擎错误）；agy 从 medium 档加入；keyed 引擎进一步提质 |
+| 无 key 并行 | simple 档零 key：bing + DuckDuckGo + exa-free 并行；agy 从 medium 档加入；跨引擎命中（ddg+exa-free）排名高于单引擎命中 |
 | SSRF 与 Clash TUN fake-ip | 字面量 198.18/15（RFC 2544 基准段）一律拦截；主机名解析整体落入 198.18/15 时视为 TUN fake-ip 放行（真实连接由 TUN 设备路由）；`DSH_SEARCH_ALLOW_TUN_FAKEIP=0` 可关闭豁免。实测：fake-ip 机器上 fetch_page github.com 953ms（Jina） |
 | deep_research（bundle） | 单轮 18s：tokio v1.53.1 结论 + 跨源佐证 + gaps/suggested_queries 完整 |
 | research_parallel（bundle） | 2 子代理并行 53.6s：10 个一手源（changelog/crates.io/GitHub 三处交叉一致） |
