@@ -14,11 +14,13 @@
 |---|---|
 | **内置 web_search 升级** | 注册 `WebSearchProvider` 并 patch 改写 `searchProvider`，内置 `web_search` 直接跑在本插件的免费优先引擎链上（保留原生引用卡片） |
 | `fused_search` | 多引擎融合检索：免费引擎**并行**（Antigravity CLI / Bing / DuckDuckGo / Exa MCP —— 全部无 key），keyed 引擎在配置 key 后加入（Tavily / Brave / Exa）。当前搜索层用 `/web_change` 切换（free=仅无 key 引擎 / api=全池），也支持按次 `layer` 覆盖。复杂度路由、Grok 风格查询预处理、域名硬过滤、半衰期时效衰减、跨引擎共现打分、6h TTL 缓存 |
-| `x_search` | X/Twitter 搜索：通过本地 Grok Build CLI 借道（`~/.grok/auth.json` 登录态），返回结构化证据（summary + 帖子列表 + 不确定性）；无订阅时 45s 超时降级，不阻塞调用 |
+| `x_search` | X/Twitter 实时搜索：帖子 / 用户 / 线程。`keyword`/`semantic` 走**并行即时搜索** —— 托管 xAI `x_search` 工具（`/x-login` 导入 grok 登录，或 `XAI_API_KEY`）∥ 融合多引擎（限 x.com）同时跑，结果按 status id/url 去重合并。**零凭据也能用**：多引擎 + oEmbed 全文增强（~2s），用户结构化资料走 X 匿名 guest GraphQL，线程全文走 oEmbed。`/x-login` 启用官方路径，`/x-logout` 关闭 |
+| `/x-login` | 把 xAI 凭据导入 `~/.dsh-search-boost-xauth.json` 以启用官方 `x_search` 路径：`/x-login`（无参 = 从你的 grok 登录 `~/.grok/auth.json` 导入）、`/x-login -k <XAI_API_KEY>`（公开 api.x.ai）、`/x-login status`。OIDC token 自动刷新（尽力同步回 grok 文件）；grok CLI 自己的登录永不被改动 |
+| `/x-logout` | 删除 `/x-login` 凭据：官方托管路径被禁用，`x_search` 只用多引擎 / guest-GraphQL / oEmbed 降级链 |
 | `fetch_page` | Jina Reader 正文抓取 + 本地 HTML 回退 + `focus` 定向提取（省 ~90% token）+ 24h 缓存 |
 | `deep_research` | step 模式深研：complex 融合检索 + 覆盖度分析 + 跨域佐证统计 + 缺口 + 建议查询，**由主 agent 驱动多轮直至收敛** |
 | `research_parallel` | 多 agent 并行深研：子查询分解 → 并行派 DSH 原生 subagent（每代理独立上下文，继承 `fused_search` / `fetch_page`）→ 时间预算 → 来源合并 |
-| `search_stats` | 缓存 / 分档 / 引擎可用性 / grok 状态审计 |
+| `search_stats` | 缓存 / 分档 / 引擎可用性 / x_search 凭据状态审计 |
 | 搜索守则 | `systemPrompt.section` 正规注入：时效事实必搜、技术论断验证、X 内容路由 `x_search`、停止条件、成本感知（免费引擎优先） |
 
 ## 安装（bundle，推荐）
@@ -27,7 +29,7 @@
 
 ```sh
 dsh plugin add dsh-search-boost          # 最新版
-dsh plugin add dsh-search-boost@0.0.2    # 锁定版本
+dsh plugin add dsh-search-boost@0.0.3    # 锁定版本
 ```
 
 npm 安装按版本分发、不依赖任何本地 checkout；registry 上的包永远对应一个已提交、已测试的工作树（由 `prepublishOnly` 门禁保证）。
@@ -112,7 +114,20 @@ cordis_run(pluginId, packageId, mode: "run")
 
 2. 环境变量回退：`TAVILY_API_KEY` / `EXA_API_KEY` / `BRAVE_API_KEY`
 
-缺 key 的引擎自动从并行列表剔除。**免费引擎无需任何配置**：Antigravity CLI（macOS/Linux 装一次、浏览器登录一次）、Bing、DuckDuckGo、Exa MCP（exa-free）开箱即用，且无 key 引擎并行运行——单个引擎失败不会让你空手而归。`free` 层只调无 key 引擎，`api` 层加入配置了 key 的 Tavily / Brave / Exa。X 搜索需要本机装有 Grok Build 且已登录（SuperGrok / X Premium 订阅）。
+缺 key 的引擎自动从并行列表剔除。**免费引擎无需任何配置**：Antigravity CLI（macOS/Linux 装一次、浏览器登录一次）、Bing、DuckDuckGo、Exa MCP（exa-free）开箱即用，且无 key 引擎并行运行——单个引擎失败不会让你空手而归。`free` 层只调无 key 引擎，`api` 层加入配置了 key 的 Tavily / Brave / Exa。
+
+### x_search 凭据（可选）
+
+`x_search` 零凭据即可用——直接走多引擎路由（限 x.com）+ oEmbed 全文，用户结构化资料走匿名 guest GraphQL。**官方托管路径**（xAI `x_search` 工具，实时站内搜索 + 高级语法）是显式开关：
+
+| 命令 | 作用 |
+|---|---|
+| `/x-login` | 把你的 grok 登录（`~/.grok/auth.json`）导入 `~/.dsh-search-boost-xauth.json`，此后走官方路径（OIDC 自动刷新，尽力同步回 grok 文件）。需要 SuperGrok / X Premium+ 订阅 |
+| `/x-login -k <XAI_API_KEY>` | 同上，但用 console.x.ai 的 API key（公开 `api.x.ai` 端点） |
+| `/x-login status` | 查看凭据链（env key → 本地副本 → grok 文件存在但未导入） |
+| `/x-logout` | 删除本地副本——官方路径禁用，`x_search` 回到免凭据链。**永不触碰 grok CLI 自己的登录** |
+
+`~/.grok/auth.json` **不会被自动消费**：没有显式 `/x-login`（或 `XAI_API_KEY` 环境变量）时，`x_search` 只用免凭据链。路由：`keyword`/`semantic` → 托管 x_search ∥ 多引擎并行、合并去重（无凭据时多引擎 + oEmbed 约 2s）；`user` → guest GraphQL 结构化资料 + 时间线 → 多引擎账号链接；`thread` → oEmbed 单条全文。
 
 ## 实测基准（2026-08，Windows + headless）
 
@@ -124,23 +139,29 @@ cordis_run(pluginId, packageId, mode: "run")
 | SSRF 与 Clash TUN fake-ip | 字面量 198.18/15（RFC 2544 基准段）一律拦截；主机名解析整体落入 198.18/15 时视为 TUN fake-ip 放行（真实连接由 TUN 设备路由）；`DSH_SEARCH_ALLOW_TUN_FAKEIP=0` 可关闭豁免。实测：fake-ip 机器上 fetch_page github.com 953ms（Jina） |
 | deep_research（bundle） | 单轮 18s：tokio v1.53.1 结论 + 跨源佐证 + gaps/suggested_queries 完整 |
 | research_parallel（bundle） | 2 子代理并行 53.6s：10 个一手源（changelog/crates.io/GitHub 三处交叉一致） |
-| x_search 超时降级 | 45.09s 精确超时，错误信息明确，不阻塞 |
-| grok json-schema 模式 | 17s 返回 envelope（需要订阅的 X 搜索除外） |
+| x_search（免凭据） | 零凭据：keyword 走多引擎（site:x.com）+ oEmbed 全文增强，约 2-5s；user 走 guest GraphQL（结构化资料 + 最近时间线含互动数，实测 @NASA 92M 粉丝）；thread 走 oEmbed 全文 |
+| x_search（官方路径） | `/x-login` 后：托管 xAI 工具直连 Responses API（零子进程）——keyword 返回实时帖子（含互动），user 返回结构化账号数据；与多引擎路由并行并合并（实测 7 条 = 托管 3 + 引擎补充 4，去重后） |
+| x_search 凭据生命周期 | 默认（未 `/x-login`）→ 即使 `~/.grok/auth.json` 存在也禁用官方路径；`/x-login` → 启用；`/x-logout` → 再禁用，降级链依然完整可用 |
 
 ## 架构要点
 
 - bundle 运行在宿主进程：Node `fetch` / `child_process` 直用，无沙箱 shell 绕行（对比会话级插件需要 `ctx.shell.run` + 引号处理）
 - patch 层覆盖 `web.searchProvider` 是整个集成的关键：内置 web_search 的 schema/UI 不变，后端换成引擎链
-- X 搜索抄自 [liustack/modsearch](https://github.com/liustack/modsearch)（MIT）：`grok -p --always-approve --json-schema`，`structuredOutput` 为 null 时从 `text` salvage 契约对象
+- X 搜索三层结构：(1) **官方托管路径**（`lib/xsearch.js`）直接 POST Responses API、携带托管 `x_search` 工具——零 grok 子进程；凭据只来自 `/x-login` 或 `XAI_API_KEY`；(2) **免凭据链**（`lib/xfallback.js`）按 type 路由：多引擎（限 x.com）+ oEmbed 全文、guest GraphQL 结构化用户、oEmbed 线程——带 IPv4 强制 DNS（Windows undici 修复）、2h 缓存的 guest token、404 时 query id 自愈；(3) 同步毫秒级凭据预检：官方路径未启用时直接走免凭据链，不等超时
+- X 相关 fetch 全部走 `lib/xfallback.js` 的 IPv4 强制 `https.Agent`（Windows 上 undici 默认 IPv6 优先 DNS，对 bing.com / x.com 会间歇性连接超时）
 
 ## 文件
 
 ```
-index.js                    — bundle 插件入口（provider 注册 + 工具注册 + 守则注入）
+index.js                    — bundle 插件入口（provider 注册 + 工具注册 + 命令 + 守则注入）
 lib/engines.js              — key 加载 + 引擎链 failover
-lib/fusion.js               — 融合打分 / 缓存
+lib/exa-free.js             — Exa MCP 无 key 引擎（free 层质量腿）
+lib/layer.js                — free/api 搜索层状态，/web_change 切换（落盘）
+lib/fusion.js               — 融合打分 / 分档表 / 缓存
 lib/fetch.js                — Jina Reader + 本地回退 + focus 提取
-lib/grok.js                 — X（Twitter）搜索（Grok Build CLI）
+lib/xauth.js                — x_search 凭据链（/x-login 状态、OIDC 刷新、/x-logout）
+lib/xsearch.js              — x_search 官方路径：直连 Responses API（托管工具，零子进程）
+lib/xfallback.js            — x_search 免凭据链：多引擎 + oEmbed + guest GraphQL（IPv4 agent、guest token 缓存、query id 自愈）
 lib/research.js             — deep_research 单轮 + research_parallel 扇出
 lib/policy.js               — 主动搜索守则文本
 cordis.patch.yml            — patch 层（web.searchProvider + 插件行）

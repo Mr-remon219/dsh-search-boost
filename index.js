@@ -5,16 +5,20 @@
 // at it, so the built-in `web_search` runs on our free-by-default engine chain
 // (Antigravity CLI → Bing → Tavily → Brave → Exa) while keeping the native
 // citation cards. Beside the provider, we register our own tools: fused_search
-// (multi-engine fusion), fetch_page (focused page reading), and x_search (X /
-// Twitter via the local Grok Build CLI).
+// (multi-engine fusion), fetch_page (focused page reading), x_search (X /
+// Twitter: hosted xAI tool ∥ multi-engine parallel instant search, with a
+// credential-free multi-engine + guest-GraphQL + oEmbed fallback chain), plus
+// deep_research / research_parallel / search_stats.
 //
 // This plugin runs inside the dsh host process, so it uses Node's fetch /
 // child_process directly — no sandbox shell indirection needed.
 
 import { loadKeys, engineRegistry, ENGINE_ORDER } from './lib/engines.js'
-import { fusedSearch, makeCache, estimateComplexity, TIER_ENGINES, TIER_ENGINES_FREE, searchCacheKey } from './lib/fusion.js'
+import { fusedSearch, makeCache, estimateComplexity, TIER_ENGINES, TIER_ENGINES_FREE, searchCacheKey, hostOf, normalizeUrl } from './lib/fusion.js'
 import { fetchPage, makePageCache } from './lib/fetch.js'
-import { searchX, grokAvailable } from './lib/grok.js'
+import { runXTool, xAuthAvailableSync } from './lib/xsearch.js'
+import { fallbackXSearch, hitToPost } from './lib/xfallback.js'
+import { authStatus, importFromGrok, importApiKey, logout, piAuthPath, jwtTier, tierName } from './lib/xauth.js'
 import { SEARCH_POLICY_SECTION } from './lib/policy.js'
 import { researchRound, parallelResearch, setTimer } from './lib/research.js'
 import { getLayer, setLayer, LAYER_LABELS } from './lib/layer.js'
@@ -46,6 +50,8 @@ export function apply(ctx, config = {}) {
   safe('search_stats', () => { if (config.searchStats !== false) registerStatsTool(ctx) })
   safe('policy section', () => ctx.systemPrompt?.section(SEARCH_POLICY_SECTION))
   safe('web_change command', () => registerWebChangeCommand(ctx))
+  safe('x-login command', () => registerXLoginCommand(ctx))
+  safe('x-logout command', () => registerXLogoutCommand(ctx))
   try {
     setTimer((ms) => ctx.timeout(ms))
   } catch (err) {
@@ -110,6 +116,42 @@ async function runFused(engines, { query, queries, engineList, maxResults, inclu
   if (stats.recent.length > 20) stats.recent.pop()
   SEARCH_CACHE.set(key, result)
   return result
+}
+
+/**
+ * Layer-aware multi-engine search restricted to X domains — the "instant"
+ * parallel channel of x_search and the credential-free fallback's injected
+ * webSearch. Calls the engine registry directly (bypassing the fusion scorer,
+ * whose per-domain cap of 2 would truncate an X-only result set).
+ */
+async function domainSearch(engines, { query, maxResults = 5, includeDomains = ['x.com', 'twitter.com'], signal }) {
+  const active = getLayer()
+  const keyed = active === 'free' ? [] : ['tavily', 'brave', 'exa']
+  const names = availableEngines(engines, ['bing', 'ddg', 'exa-free', ...keyed])
+  const n = Math.min(Math.max(maxResults ?? 5, 1), 8)
+  const per = Math.max(4, Math.ceil(n * 0.8))
+  const opts = { includeDomains, signal }
+  const tasks = names.map(async (name) => {
+    try {
+      return await runEngine(engines, name, query, per, opts)
+    } catch {
+      return []
+    }
+  })
+  const all = (await Promise.all(tasks)).flat()
+  const seen = new Set()
+  const out = []
+  for (const h of all) {
+    if (!h?.url) continue
+    const host = hostOf(h.url)
+    if (!includeDomains.some((d) => host === d || host.endsWith('.' + d))) continue
+    const key = normalizeUrl(h.url)
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push({ title: h.title ?? '', url: h.url, snippet: h.snippet ?? '', domain: host })
+    if (out.length >= n) break
+  }
+  return out
 }
 
 // ---------- web seam provider (powers the built-in web_search) ----------
@@ -299,43 +341,52 @@ function registerFetchPageTool(ctx) {
 
 // ---------- x_search tool ----------
 
+const X_MODES = ['keyword', 'semantic', 'user', 'thread']
+
 function registerXSearchTool(ctx) {
   ctx.tools.register({
     name: 'x_search',
     description:
-      'Search X (Twitter) posts through the local Grok Build CLI. Use for questions about posts, threads, accounts, or discussions on X: ' +
-      'what someone posted, reactions to an event, sentiment in a community. Returns structured evidence with a summary and per-post items with URLs. ' +
-      'Requires Grok Build installed and signed in (~/.grok/auth.json).',
+      'Search X (Twitter) in real time: posts, users, threads. keyword/semantic run as PARALLEL instant search — the hosted xAI x_search tool ' +
+      '(grok login enabled via /x-login, or XAI_API_KEY) runs alongside the fused multi-engine route (site-restricted to x.com) and the results are merged, deduped by status id/url. ' +
+      'Works even with NO credentials (routes straight to the multi-engine route + oEmbed full-text enhancement, ~2s); user mode gets a structured profile + recent timeline ' +
+      'via X\'s anonymous guest GraphQL; thread mode via oEmbed. Four modes: keyword (X advanced syntax), semantic (natural language), user (accounts), thread (conversation by post id). ' +
+      'Enable the official path with /x-login, disable it with /x-logout.',
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        query: { type: 'string', description: 'What to look for on X (accounts, topics, time bounds in plain words).' },
-        max_results: { type: 'number', description: 'Maximum number of result items (default 8).' },
+        type: { type: 'string', enum: X_MODES, description: 'Which X search mode: keyword (X advanced syntax), semantic (natural language), user (accounts), thread (conversation by post id).' },
+        query: { type: 'string', description: 'The search query (keyword/semantic) or the target handle for user.' },
+        username: { type: 'string', description: 'Target account for type=user.' },
+        post_id: { type: 'string', description: 'Post id or x.com/.../status/<id> URL for type=thread.' },
+        max_results: { type: 'number', description: 'Max results (default 5, max 10).' },
+        from_date: { type: 'string', description: 'YYYY-MM-DD lower bound (keyword/semantic).' },
+        to_date: { type: 'string', description: 'YYYY-MM-DD upper bound (keyword/semantic).' },
+        allowed_x_handles: { type: 'array', items: { type: 'string' }, description: 'Hosted-tool handle filter (max 20).' },
+        excluded_x_handles: { type: 'array', items: { type: 'string' }, description: 'Hosted-tool handle exclusion (max 20, mutually exclusive with allowed).' },
       },
-      required: ['query'],
+      required: [],
     },
     output: {
       schema: {
         type: 'object',
         additionalProperties: false,
         properties: {
-          status: { type: 'string' }, source: { type: 'string' }, summary: { type: 'string' },
+          via: { type: 'string' },
+          results: { type: 'number' },
+          tookMs: { type: 'number' },
+          credential: { type: 'string' },
+          note: { type: 'string' },
+          error: { type: 'string' },
+          xResults: { type: 'number' },
+          engineResults: { type: 'number' },
           items: {
             type: 'array',
-            items: {
-              type: 'object',
-              additionalProperties: false,
-              properties: {
-                title: { type: 'string' }, url: { type: 'string' }, snippet: { type: 'string' },
-                source: { type: 'string' }, published_at: { type: 'string' },
-              },
-              required: ['title', 'url'],
-            },
+            items: { type: 'object', additionalProperties: true },
           },
-          uncertainty: { type: 'array', items: { type: 'string' } },
         },
-        required: ['summary', 'items'],
+        required: ['via'],
       },
       render: (_args, value) => [{
         type: 'text',
@@ -345,34 +396,196 @@ function registerXSearchTool(ctx) {
     timeoutMs: 180000,
     isConcurrencySafe: () => true,
     async execute(args, exec) {
-      if (typeof args?.query !== 'string' || args.query.trim() === '') {
-        throw new Error('x_search needs a non-empty string "query".')
+      const started = Date.now()
+      const signal = exec?.signal
+      const kind = X_MODES.includes(args?.type) ? args.type : 'keyword'
+      const subj = args.query ?? args.username ?? args.post_id ?? ''
+      if (!subj) throw new Error('x_search: provide query (keyword/semantic/user) or post_id (thread).')
+      const maxResults = Math.min(Math.max(args.max_results ?? 5, 1), 10)
+
+      const engineSearch = (q, n) => domainSearch(engines, { query: q, maxResults: n, signal })
+      const webSearch = (q, n) =>
+        engineSearch(q, n).then((hits) => hits.map((h) => ({ title: h.title, url: h.url, snippet: h.snippet, domain: h.domain })))
+
+      // the fallback chain: multi-engine (x.com) + oEmbed; guest GraphQL for user
+      const runFallback = async (primaryErr) => {
+        try {
+          const fb = await fallbackXSearch({
+            type: kind,
+            query: args.query,
+            username: args.username,
+            post_id: args.post_id,
+            limit: maxResults,
+            signal,
+            webSearch,
+          })
+          const items = Array.isArray(fb.data) ? fb.data : [fb.data]
+          return {
+            via: `fallback:${fb.via}`,
+            results: items.length,
+            tookMs: Date.now() - started,
+            credential: `fallback:${fb.via}`,
+            note: `primary failed: ${String(primaryErr).slice(0, 200)}`,
+            items,
+          }
+        } catch (fbErr) {
+          const msg = `${String(primaryErr)} | fallback: ${fbErr instanceof Error ? fbErr.message : String(fbErr)}`
+          return { via: 'error', results: 0, tookMs: Date.now() - started, error: msg, items: [] }
+        }
       }
-      return searchX(args.query, Math.floor(args.max_results ?? 8), exec.signal)
+
+      // preflight (sync, zero network): no official credentials → straight to
+      // the multi-engine chain instead of waiting on a primary-path timeout
+      if (!xAuthAvailableSync()) {
+        return runFallback('no xAI credentials (official path disabled — /x-login enables it)')
+      }
+
+      // keyword/semantic: PARALLEL instant search — hosted x_search ∥ multi-engine
+      if (kind === 'keyword' || kind === 'semantic') {
+        const engQuery = args.query ?? (args.username ? `from:${args.username}` : subj)
+        const [xOutcome, engOutcome] = await Promise.allSettled([
+          runXTool(
+            {
+              type: kind,
+              query: args.query,
+              username: args.username,
+              post_id: args.post_id,
+              from_date: args.from_date,
+              to_date: args.to_date,
+              allowed_x_handles: args.allowed_x_handles,
+              excluded_x_handles: args.excluded_x_handles,
+              max_results: maxResults,
+            },
+            signal,
+          ),
+          engineSearch(engQuery, maxResults),
+        ])
+        if (xOutcome.status === 'fulfilled') {
+          const xPosts = Array.isArray(xOutcome.value.data) ? xOutcome.value.data : []
+          // engine results supplement: dedupe against x results by id/url
+          const extra = engOutcome.status === 'fulfilled'
+            ? engOutcome.value
+                .filter((h) => h.title || h.snippet)
+                .map(hitToPost)
+                .filter((p) => !xPosts.some((x) => (x.id && p.id && x.id === p.id) || (x.url && p.url && x.url === p.url)))
+            : []
+          const merged = [...xPosts, ...extra]
+          const credential = xOutcome.value.credential + (extra.length ? ' + multi-engine parallel' : '')
+          return {
+            via: 'parallel',
+            results: merged.length,
+            tookMs: Date.now() - started,
+            credential,
+            xResults: xPosts.length,
+            engineResults: extra.length,
+            items: merged,
+          }
+        }
+        return runFallback(xOutcome.reason instanceof Error ? xOutcome.reason.message : String(xOutcome.reason))
+      }
+
+      // user/thread: serial primary path, fallback chain on failure
+      try {
+        const res = await runXTool(
+          {
+            type: kind,
+            query: args.query,
+            username: args.username,
+            post_id: args.post_id,
+            max_results: maxResults,
+          },
+          signal,
+        )
+        const items = Array.isArray(res.data) ? res.data : [res.data]
+        return { via: res.credential, results: items.length, tookMs: res.tookMs, credential: res.credential, items }
+      } catch (err) {
+        return runFallback(err instanceof Error ? err.message : String(err))
+      }
     },
   })
 }
 
+function renderItem(item) {
+  if (Array.isArray(item.recent_posts)) {
+    // user shape: profile + recent posts
+    const posts = item.recent_posts.slice(0, 3)
+    const followers = item.followers != null ? item.followers : '?'
+    return `${item.name} (@${item.username}) — followers ${followers}, verified ${item.verified ?? false}\n  bio: ${item.bio ?? ''}\n  recent: ${posts.map((p) => String(p.text).slice(0, 80)).join(' | ') || '(none)'}`
+  }
+  const author = item.author ? item.author + (item.username ? ` (@${item.username})` : '') + ': ' : ''
+  return `${author}${item.text || item.url}`
+}
+
 function renderX(value) {
   const lines = []
-  if (value.status === 'degraded') {
-    lines.push(`[X was unreachable; a ${value.source} search answered second-hand. Treat as indirect evidence.]`)
+  lines.push(`**x_search** — via ${value.via}, ${value.results} result(s), ${value.tookMs}ms`)
+  if (value.note) lines.push(`note: ${value.note}`)
+  if (value.error) {
+    lines.push(`ERROR: ${value.error}`)
+    return lines.join('\n')
   }
-  lines.push(value.summary)
-  const items = value.items ?? []
-  if (items.length > 0) {
-    lines.push('', 'Results:')
-    items.forEach((item, index) => {
-      const dated = item.published_at ? ` (${item.published_at})` : ''
-      lines.push(`${index + 1}. ${item.title}${dated} — ${item.url}`)
-      if (item.snippet) lines.push(`   ${item.snippet}`)
-    })
-  }
-  const uncertainty = value.uncertainty ?? []
-  if (uncertainty.length > 0) {
-    lines.push('', `Uncertain: ${uncertainty.join('; ')}`)
+  for (const [i, item] of (value.items ?? []).entries()) {
+    lines.push(`${i + 1}. ${renderItem(item)}`)
   }
   return lines.join('\n')
+}
+
+// ---------- /x-login / /x-logout commands ----------
+
+function registerXLoginCommand(ctx) {
+  const commands = ctx.get('commands')
+  if (!commands) {
+    console.error('[dsh-search-boost] commands service unavailable — /x-login not registered')
+    return
+  }
+  return commands.register({
+    name: 'x-login',
+    description: 'Enable the official hosted x_search path: /x-login (import your grok login from ~/.grok/auth.json), /x-login -k <XAI_API_KEY> (public api.x.ai), /x-login status. /x-logout disables it again.',
+    input: { hint: '[-k <XAI_API_KEY> | status]' },
+    handler: ({ rawInput }) => {
+      const parts = String(rawInput ?? '').trim().split(/\s+/)
+      try {
+        if (parts[0] === 'status') {
+          const st = authStatus()
+          return { kind: 'success', text: `x-login status — ${st.source}: ${st.detail}` }
+        }
+        if (parts[0] === '-k') {
+          const key = parts[1] ?? ''
+          importApiKey(key)
+          return { kind: 'success', text: `x-login: API key saved → ${piAuthPath()} (public api.x.ai will be used for x_search)` }
+        }
+        const entry = importFromGrok()
+        return {
+          kind: 'success',
+          text: `x-login: grok login imported → ${piAuthPath()} (${entry.email ?? entry.user_id ?? '?'}); official hosted x_search enabled. /x-logout disables it.`,
+        }
+      } catch (err) {
+        return { kind: 'error', text: `x-login failed: ${err instanceof Error ? err.message : String(err)}` }
+      }
+    },
+  })
+}
+
+function registerXLogoutCommand(ctx) {
+  const commands = ctx.get('commands')
+  if (!commands) {
+    console.error('[dsh-search-boost] commands service unavailable — /x-logout not registered')
+    return
+  }
+  return commands.register({
+    name: 'x-logout',
+    description: 'Remove the /x-login credentials: the official hosted x_search path is disabled and x_search uses only the multi-engine / guest-GraphQL / oEmbed fallback chain. grok CLI\'s own login is untouched. Usage: /x-logout',
+    input: { hint: '' },
+    handler: () => {
+      const removed = logout()
+      return {
+        kind: 'success',
+        text: removed
+          ? 'x-logout: /x-login credentials removed — x_search now uses the multi-engine / guest-GraphQL / oEmbed fallback chain only.\nRun /x-login to re-enable the official hosted x_search path. (grok CLI\'s own login is untouched.)'
+          : 'x-logout: no /x-login credentials found — x_search is already on the fallback chain. Run /x-login to enable the official path.',
+      }
+    },
+  })
 }
 
 // ---------- deep_research tool ----------
@@ -611,6 +824,7 @@ function registerStatsTool(ctx) {
         properties: {
           startedAt: { type: 'string' }, cacheHits: { type: 'number' }, cacheMisses: { type: 'number' },
           tierCounts: { type: 'object' }, engines: { type: 'object' }, grok: { type: 'boolean' },
+          x: { type: 'object', additionalProperties: true },
           layer: { type: 'string' },
           recent: { type: 'array', items: { type: 'object', additionalProperties: true } },
         },
@@ -623,7 +837,7 @@ function registerStatsTool(ctx) {
           `cache: ${value.cacheHits} hits / ${value.cacheMisses} misses\n` +
           `tiers: ${JSON.stringify(value.tierCounts)}\n` +
           `engines: ${JSON.stringify(value.engines)}\n` +
-          `grok (X): ${value.grok ? 'ready' : 'not available'}\n` +
+          `x_search: ${value.grok ? 'official path ready' : 'fallback chain only'} (${value.x?.source ?? '?'}${value.x?.official ? ', enabled' : ', disabled'})\n` +
           `recent: ${value.recent.map((r) => `"${r.query}"(${r.tookMs}ms,${r.results}r${r.cacheHit ? ',hit' : ''})`).join(' | ')}`,
       }],
     },
@@ -631,6 +845,7 @@ function registerStatsTool(ctx) {
     isConcurrencySafe: () => true,
     async execute() {
       const keys = loadKeys()
+      const xSource = authStatus()
       return {
         startedAt: stats.startedAt,
         layer: getLayer(),
@@ -646,7 +861,8 @@ function registerStatsTool(ctx) {
           brave: Boolean(keys.brave),
           exa: Boolean(keys.exa),
         },
-        grok: grokAvailable(),
+        grok: xAuthAvailableSync(),
+        x: { official: xAuthAvailableSync(), source: xSource.source },
         recent: stats.recent.slice(0, 10),
       }
     },
