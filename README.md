@@ -129,7 +129,7 @@ Engines without a key are automatically dropped from the fan-out. **Free engines
 | `/x-login status` | Show the credential chain (env key → local copy → grok file present-but-not-imported) |
 | `/x-logout` | Delete the local copy — official path disabled, `x_search` back to the credential-free chain. **Never touches grok CLI's own login** |
 
-`~/.grok/auth.json` is **never auto-consumed**: without an explicit `/x-login` (or `XAI_API_KEY` env), `x_search` uses only the credential-free chain. Routing: `keyword`/`semantic` → hosted x_search ∥ multi-engine in parallel, merged and deduped (with no credentials: multi-engine + oEmbed in ~2s); `user` → guest GraphQL structured profile + timeline → multi-engine profile links; `thread` → oEmbed single-post full text.
+`~/.grok/auth.json` is **never auto-consumed**: without an explicit `/x-login` (or `XAI_API_KEY` env), `x_search` uses only the credential-free chain. `/x-login` sets `recordInput: false`, so an API key passed on the command line never lands in the session log — the state file owns the payload. Routing: `keyword`/`semantic` → hosted x_search ∥ multi-engine in parallel, merged and deduped (with no credentials: multi-engine + oEmbed in ~2s); `user` → guest GraphQL structured profile + timeline → multi-engine profile links; `thread` → oEmbed single-post full text.
 
 ## Verified benchmarks (2026-08, Windows + headless)
 
