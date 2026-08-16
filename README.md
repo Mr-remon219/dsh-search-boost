@@ -30,18 +30,21 @@ A **bundle plugin** for DSH that upgrades the built-in `web_search` and register
 **From npm (recommended for users — published release):**
 
 ```sh
-dsh plugin add dsh-search-boost          # latest
-dsh plugin add dsh-search-boost@0.0.3    # pin a version
+dsh plugin --profile web add dsh-search-boost          # latest
+dsh plugin --profile web add dsh-search-boost@0.1.0    # pin a version
+dsh plugin --profile web update dsh-search-boost       # update to a newer release
 ```
+
+`--profile <name>` is **required** (DSH's plugin command manages one profile at a time; `web` is the standard web-UI profile). The command forwards to pnpm, then **automatically adds the package to the profile's `dsh.profile.bundles` layer list** — DSH detects the package's `dsh.bundle.patch` declaration and wires the patch layer for you, no manual editing. Restart `dsh --profile web` and the plugin is live.
 
 npm-sourced installs are versioned and independent of any local checkout; the registry package always matches a committed, tested tree (enforced by the `prepublishOnly` gate).
 
 **From source (development / latest git):**
 
 ```sh
-dsh plugin add github:Mr-remon219/dsh-search-boost        # latest main
-dsh plugin add github:Mr-remon219/dsh-search-boost#<hash> # pin a commit
-dsh plugin --profile web add git+file:///path/to/repo     # local git source (protocol verified)
+dsh plugin --profile web add github:Mr-remon219/dsh-search-boost        # latest main
+dsh plugin --profile web add github:Mr-remon219/dsh-search-boost#<hash> # pin a commit
+dsh plugin --profile web add git+file:///path/to/repo                   # local git source (protocol verified)
 ```
 
 Git/local sources are ideal for iterating on fixes: edit → restart → verify.
@@ -68,7 +71,7 @@ The official way to run DSH is `npx @deepseek-ai/dsh web`, which leaves **no glo
    npx --yes @deepseek-ai/dsh plugin --profile web add <path-to-this-repo>
    ```
 
-`dsh plugin add` also needs **pnpm** (DSH uses it to resolve bundle dependencies). The script checks for it and auto-adds the npm global dir to the current session's `PATH` when pnpm was installed but isn't on it. If pnpm is genuinely missing:
+`dsh plugin` also needs **pnpm** (DSH uses it to resolve bundle dependencies). The script checks for it and auto-adds the npm global dir to the current session's `PATH` when pnpm was installed but isn't on it. If pnpm is genuinely missing:
 
 ```sh
 npm install -g pnpm
@@ -135,6 +138,8 @@ Engines without a key are automatically dropped from the fan-out. **Free engines
 
 | Scenario | Result |
 |---|---|
+| Fresh-user install from a registry tarball (`dsh plugin --profile <p> add <tarball>`) | ✓ pnpm installs the package and **automatically appends it to the profile's `dsh.profile.bundles`** (reconcile detects the `dsh.bundle.patch` declaration) — no manual editing; the installed package copy loads as a bundle (`import` → `{ name, inject, apply }`) |
+| `dsh plugin add` without `--profile` | ✗ fails with `required option '--profile <name>' not specified` — always pass `--profile <name>` (README documents the correct form) |
 | `dsh plugin add` install + patch layer applied | ✓ (`dump-config` confirms `searchProvider` rewritten + plugin row inserted) |
 | Headless end-to-end `web_search` | ✓ (headless-runner embedded in profile, runs on the free Bing chain) |
 | No-key parallel fan-out | Zero keys, simple tier: bing + DuckDuckGo + exa-free run in parallel; agy joins from the medium tier; a cross-engine hit (ddg + exa-free) out-ranks single-engine ones |
@@ -183,7 +188,7 @@ npm test      # run the test suite
 npm publish   # prepublishOnly gate: syntax check + tests + clean-tree check
 ```
 
-`npm publish` runs the `prepublishOnly` gate automatically: it aborts on a syntax error, a failing test, or a dirty working tree (`DSH_SB_ALLOW_DIRTY=1` forces through), so the registry tarball always matches the committed repo. After publishing, `dsh plugin add dsh-search-boost` installs the release.
+`npm publish` runs the `prepublishOnly` gate automatically: it aborts on a syntax error, a failing test, or a dirty working tree (`DSH_SB_ALLOW_DIRTY=1` forces through), so the registry tarball always matches the committed repo. After publishing, `dsh plugin --profile web add dsh-search-boost` installs the release.
 
 ## License
 

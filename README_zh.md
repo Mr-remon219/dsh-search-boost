@@ -28,18 +28,21 @@
 **从 npm 安装（推荐给使用者 —— 已发布版本）：**
 
 ```sh
-dsh plugin add dsh-search-boost          # 最新版
-dsh plugin add dsh-search-boost@0.0.3    # 锁定版本
+dsh plugin --profile web add dsh-search-boost          # 最新版
+dsh plugin --profile web add dsh-search-boost@0.1.0    # 锁定版本
+dsh plugin --profile web update dsh-search-boost       # 升级到更新版本
 ```
+
+`--profile <name>` 是**必填**（dsh 的 plugin 命令一次管理一个 profile；`web` 是标准 web-UI profile）。命令会转发给 pnpm，然后**自动把包加进 profile 的 `dsh.profile.bundles` 层列表** —— dsh 检测到包的 `dsh.bundle.patch` 声明后自动接好 patch 层，无需手动改配置。重启 `dsh --profile web` 即生效。
 
 npm 安装按版本分发、不依赖任何本地 checkout；registry 上的包永远对应一个已提交、已测试的工作树（由 `prepublishOnly` 门禁保证）。
 
 **从源码安装（开发 / 最新 git）：**
 
 ```sh
-dsh plugin add github:Mr-remon219/dsh-search-boost        # 最新 main
-dsh plugin add github:Mr-remon219/dsh-search-boost#<hash> # 锁定 commit
-dsh plugin --profile web add git+file:///path/to/repo     # 本地 git 源（协议已实测）
+dsh plugin --profile web add github:Mr-remon219/dsh-search-boost        # 最新 main
+dsh plugin --profile web add github:Mr-remon219/dsh-search-boost#<hash> # 锁定 commit
+dsh plugin --profile web add git+file:///path/to/repo                   # 本地 git 源（协议已实测）
 ```
 
 git/本地源适合开发迭代：改完 → 重启 → 验证。
@@ -66,7 +69,7 @@ DSH 官方推荐 `npx @deepseek-ai/dsh web` 运行，**不会产生全局 `dsh` 
    npx --yes @deepseek-ai/dsh plugin --profile web add <本仓库路径>
    ```
 
-`dsh plugin add` 还需要 **pnpm**（dsh 用它解析 bundle 依赖）。脚本会检查 pnpm，若已装但不在 PATH（例如装完没重开终端），会自动把 npm 全局目录注入当前会话的 PATH；若确实没装：
+`dsh plugin` 还需要 **pnpm**（dsh 用它解析 bundle 依赖）。脚本会检查 pnpm，若已装但不在 PATH（例如装完没重开终端），会自动把 npm 全局目录注入当前会话的 PATH；若确实没装：
 
 ```sh
 npm install -g pnpm
@@ -179,7 +182,7 @@ npm test      # 跑测试套件
 npm publish   # prepublishOnly 门禁：语法 + 测试 + 工作树干净
 ```
 
-`npm publish` 会自动执行 `prepublishOnly` 门禁：语法错误、测试失败、工作树不干净（有未提交改动）都会中止发布（`DSH_SB_ALLOW_DIRTY=1` 可强制放行），保证 registry 上的包与已提交的仓库永远一致。发布后 `dsh plugin add dsh-search-boost` 即可安装该版本。
+`npm publish` 会自动执行 `prepublishOnly` 门禁：语法错误、测试失败、工作树不干净（有未提交改动）都会中止发布（`DSH_SB_ALLOW_DIRTY=1` 可强制放行），保证 registry 上的包与已提交的仓库永远一致。发布后 `dsh plugin --profile web add dsh-search-boost` 即可安装该版本。
 
 ## License
 
