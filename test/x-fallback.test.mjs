@@ -513,13 +513,28 @@ describe('v0.0.5 DSH-native integration', () => {
     assert.equal(fetchView.truncated, true)
   })
 
-  it('wires every registration disposer into ctx.effect (Cordis teardown)', async () => {
+  it('registrations survive host fiber commit (no ctx.effect disposer handoff)', async () => {
+    // Regression: the DSH host commits the loader entry fiber right after
+    // apply() and runs every registered effect disposer — handing registration
+    // disposers to ctx.effect silently UNREGISTERED everything. Reproduced
+    // live in the host: direct register → FOUND; effect-wrapped → NULL.
+    // Registrations must therefore NOT be effect-owned. Simulating the host
+    // commit (run every disposer the mock collected) must leave every
+    // registration alive.
     const { apply } = await import('../index.js')
     const mock = makeMockCtx()
     apply(mock.ctx, {})
-    // search + fetch providers, 6 tools, policy section, status variable, 3 commands
-    assert.ok(mock.disposers.length >= 12, `expected >=12 disposers, got ${mock.disposers.length}`)
-    assert.ok(mock.disposers.every((d) => typeof d === 'function'))
+    for (const d of mock.disposers) d()
+    assert.ok(mock.providers.search, 'search provider survives fiber commit')
+    assert.ok(mock.providers.fetch, 'fetch provider survives fiber commit')
+    for (const n of ['fused_search', 'fetch_page', 'x_search', 'deep_research', 'research_parallel', 'search_stats']) {
+      assert.ok(mock.tools.has(n), `${n} survives fiber commit`)
+    }
+    for (const n of ['web_change', 'x-login', 'x-logout']) {
+      assert.ok(mock.commands.has(n), `${n} survives fiber commit`)
+    }
+    assert.ok(mock.sections.some((s) => s.name === 'search:policy'), 'policy section survives fiber commit')
+    assert.ok(mock.sections.some((s) => s.name === 'search:status'), 'status section survives fiber commit')
   })
 
   it('/x-login never records its raw input (API key hygiene)', async () => {
