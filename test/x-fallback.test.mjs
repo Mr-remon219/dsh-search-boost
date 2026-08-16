@@ -32,11 +32,18 @@ describe('v0.0.3 x_search title/entity parsing', () => {
   })
 
   it('parseOEmbedHtml strips tags/scripts and decodes entities', () => {
-    const html = '<blockquote lang="en">Full &quot;text&quot; &amp; more &#183; <a href="https://x.com/OpenAI/status/1">x.com</a><script>window.bad()</script></blockquote>'
+    const html = '<blockquote lang="en">Full &quot;text&quot; &amp; more &#183; &#x2764; &middot; &hellip; <a href="https://x.com/OpenAI/status/1">x.com</a><script>window.bad()</script></blockquote>'
     const text = parseOEmbedHtml(html)
-    assert.match(text, /Full "text" & more ·/)
+    assert.match(text, /Full "text" & more · ❤ · …/)
     assert.doesNotMatch(text, /<|>/)
+    assert.doesNotMatch(text, /&(?:quot|amp|#183|#x2764|middot|hellip);/)
     assert.doesNotMatch(text, /window\.bad/)
+  })
+
+  it('decodeEntities survives malformed entities verbatim', () => {
+    const text = parseOEmbedHtml('<p>100% &amp; &#999999999999; &unknown; &amp;amp;</p>')
+    assert.match(text, /100% &/)
+    assert.match(text, /&unknown;/)
   })
 })
 
@@ -286,6 +293,88 @@ describe('v0.0.3 fallback routing (hermetic, mocked fetch + webSearch)', () => {
         () => fallbackXSearch({ type: 'user', username: '@NASA', webSearch: async () => [] }),
         /both failed/,
       )
+    } finally {
+      globalThis.fetch = origFetch
+    }
+  })
+})
+
+describe('v0.0.4 wiring regression', () => {
+  // The x_search tool's engine fan-out must be wired to the engine registry
+  // (a missing `engines` param used to blow up inside execute). Hermetic: all
+  // fetches are mocked to throw, so no network and no credential state
+  // matters — both the parallel and the fallback path converge to a fast
+  // 'error' result whose message does NOT mention an engine wiring failure.
+  it('x_search execute reaches the fallback chain (no ReferenceError)', async () => {
+    const { apply } = await import('../index.js')
+    const tools = new Map()
+    const commands = new Map()
+    const ctx = {
+      get: (s) => ({ commands: commandsService, subagents: null }[s]),
+      web: { registerSearchProvider: () => {} },
+      tools: { register: (t) => tools.set(t.name, t) },
+      systemPrompt: { section: () => {} },
+      timeout: (ms) => ms,
+    }
+    const commandsService = { register: (c) => { commands.set(c.name, c); return c } }
+    apply(ctx, {})
+    const xTool = tools.get('x_search')
+    assert.ok(xTool, 'x_search tool registered')
+
+    const origFetch = globalThis.fetch
+    globalThis.fetch = async () => { throw new Error('network down (test)') }
+    try {
+      const result = await xTool.execute({ type: 'keyword', query: 'wiring probe' }, { signal: undefined })
+      assert.equal(result.via, 'error')
+      assert.ok(result.error)
+      assert.doesNotMatch(result.error, /engines is not defined|ReferenceError/)
+      assert.match(result.error, /no results|failed/)
+    } finally {
+      globalThis.fetch = origFetch
+    }
+  })
+
+  it('x_search per-kind TTL cache: repeat call returns cacheHit', async () => {
+    const { apply } = await import('../index.js')
+    const tools = new Map()
+    const ctx = {
+      get: (s) => ({ commands: { register: () => {} }, subagents: null }[s]),
+      web: { registerSearchProvider: () => {} },
+      tools: { register: (t) => tools.set(t.name, t) },
+      systemPrompt: { section: () => {} },
+      timeout: (ms) => ms,
+    }
+    apply(ctx, {})
+    const xTool = tools.get('x_search')
+    const origFetch = globalThis.fetch
+    // deterministic engine response: one bing-style HTML hit per call
+    let calls = 0
+    globalThis.fetch = async (url) => {
+      calls++
+      const u = String(url)
+      if (u.startsWith('https://www.bing.com/')) {
+        return new Response(
+          '<li class="b_algo"><h2><a href="https://x.com/OpenAI/status/111">OpenAI on X: &quot;cached probe post&quot;</a></h2><p>probe</p></li>',
+          { status: 200 },
+        )
+      }
+      if (u.startsWith('https://publish.x.com/oembed')) {
+        return new Response(
+          JSON.stringify({ author_name: 'OpenAI', author_url: 'https://x.com/OpenAI', html: '<blockquote>Full cached probe post body &amp; more</blockquote>' }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      throw new Error('unexpected fetch in cache test: ' + u)
+    }
+    try {
+      const args = { type: 'keyword', query: 'cached probe', max_results: 1 }
+      const first = await xTool.execute(args, { signal: undefined })
+      assert.ok(first.results >= 1, `first call should find the mocked hit (via=${first.via})`)
+      const callsAfterFirst = calls
+      const second = await xTool.execute(args, { signal: undefined })
+      assert.equal(second.cacheHit, true)
+      assert.ok(calls <= callsAfterFirst, 'cache hit must not re-fetch')
+      assert.deepEqual(second.items, first.items)
     } finally {
       globalThis.fetch = origFetch
     }
