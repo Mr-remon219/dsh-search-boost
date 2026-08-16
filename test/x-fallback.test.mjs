@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url'
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { fallbackXSearch, splitXTitle, hitToPost, parseOEmbedHtml, decodeUserId, parseUser, parseTweets } from '../lib/xfallback.js'
+import { buildXSearchPrompt, salvageJson, normalizePosts } from '../lib/xsearch.js'
+import { jwtTier } from '../lib/xauth.js'
 import { SEARCH_POLICY_SECTION } from '../lib/policy.js'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -378,6 +380,142 @@ describe('v0.0.4 wiring regression', () => {
     } finally {
       globalThis.fetch = origFetch
     }
+  })
+})
+
+describe('v0.0.5 DSH-native integration', () => {
+  // Full mock ctx capturing every DSH surface the plugin now uses.
+  function makeMockCtx() {
+    const tools = new Map()
+    const commands = new Map()
+    const sections = []
+    const variables = new Map()
+    const disposers = []
+    const providers = { search: undefined, fetch: undefined }
+    const ctx = {
+      effect: (d) => disposers.push(d),
+      get: (s) => ({ commands: commandsService, subagents: null }[s]),
+      web: {
+        registerSearchProvider: (p) => { providers.search = p; return () => {} },
+        registerFetchProvider: (p) => { providers.fetch = p; return () => {} },
+      },
+      tools: { register: (t) => { tools.set(t.name, t); return () => {} } },
+      systemPrompt: {
+        section: (s) => { sections.push(s.name); return () => {} },
+        variable: (name, provider) => { variables.set(name, provider); return () => {} },
+      },
+      timeout: (ms) => ms,
+    }
+    const commandsService = { register: (c) => { commands.set(c.name, c); return () => {} } }
+    return { ctx, tools, commands, sections, variables, disposers, providers }
+  }
+
+  it('registers the web fetch provider and maps fetchPage results into the seam contract', async () => {
+    const { apply } = await import('../index.js')
+    const mock = makeMockCtx()
+    apply(mock.ctx, {})
+    assert.ok(mock.providers.fetch, 'fetch provider registered')
+    assert.equal(mock.providers.fetch.id, 'dsh-search-boost')
+    assert.equal(mock.providers.fetch.available(), true)
+
+    const origFetch = globalThis.fetch
+    globalThis.fetch = async (url) => {
+      const u = String(url)
+      if (u.startsWith('https://r.jina.ai/')) {
+        return new Response('# Page\n\nhello world body here with enough padding text to clear the short-content fallback threshold comfortably\n\nmore paragraph text to be safe\n\n', { status: 200 })
+      }
+      throw new Error('unexpected fetch: ' + u)
+    }
+    try {
+      const result = await mock.providers.fetch.fetch({ url: 'https://1.1.1.1/doc' })
+      assert.equal(result.url, 'https://1.1.1.1/doc')
+      assert.equal(result.statusCode, 200)
+      assert.equal(result.body.kind, 'text')
+      assert.match(result.body.content, /hello world/)
+      assert.equal(result.truncated, false)
+    } finally {
+      globalThis.fetch = origFetch
+    }
+  })
+
+  it('registers a search:status prompt variable with the live layer + x state', async () => {
+    const { apply } = await import('../index.js')
+    const mock = makeMockCtx()
+    apply(mock.ctx, {})
+    const provider = mock.variables.get('search:status')
+    assert.ok(provider, 'search:status variable registered')
+    const line = provider()
+    assert.match(line, /search layer: (free|api)/)
+    assert.match(line, /x_search: (official path|fallback chain)/)
+  })
+
+  it('search tools declare DSH-native presentation (call views + web result cards)', async () => {
+    const { apply } = await import('../index.js')
+    const mock = makeMockCtx()
+    apply(mock.ctx, {})
+
+    const fused = mock.tools.get('fused_search')
+    const call = fused.presentCall({ query: 'tokio latest', max_results: 5 })
+    assert.equal(call.card, 'generic')
+    assert.equal(call.kind, 'search')
+    assert.match(call.title, /fused_search/)
+
+    const value = {
+      query: 'tokio',
+      results: [{ title: 'Tokio', url: 'https://tokio.rs', snippet: 'async', published: '2026-01-01', domain: 'tokio.rs' }],
+      tookMs: 10,
+      tier: 'simple',
+    }
+    const meta = fused.output.presentationMeta({ query: 'tokio', max_results: 5 }, value)
+    assert.equal(meta.sources.length, 1)
+    assert.equal(meta.sources[0].url, 'https://tokio.rs')
+    assert.equal(meta.sources[0].publishedAt, '2026-01-01')
+    const view = fused.presentResult({ query: 'tokio' }, { content: [], isError: false, meta })
+    assert.equal(view.card, 'web')
+    assert.equal(view.kind, 'search')
+    assert.equal(view.sources[0].title, 'Tokio')
+
+    const x = mock.tools.get('x_search')
+    const xCall = x.presentCall({ type: 'keyword', query: 'ollama' })
+    assert.equal(xCall.kind, 'search')
+    assert.match(xCall.title, /x_search keyword/)
+    const xMeta = x.output.presentationMeta({}, {
+      via: 'parallel',
+      results: 1,
+      items: [{ id: '1', author: 'OpenAI', username: 'OpenAI', text: 'hello from X', url: 'https://x.com/OpenAI/status/1' }],
+    })
+    assert.equal(xMeta.sources.length, 1)
+    assert.equal(xMeta.sources[0].url, 'https://x.com/OpenAI/status/1')
+    assert.match(xMeta.sources[0].title, /OpenAI/)
+    // user shape: recent_posts flattened into sources
+    const userMeta = x.output.presentationMeta({}, {
+      via: 'guest-graphql',
+      results: 1,
+      items: [{ name: 'NASA', username: 'NASA', recent_posts: [{ id: '2', text: 'post body', url: 'https://x.com/NASA/status/2' }] }],
+    })
+    assert.equal(userMeta.sources.length, 1)
+    assert.equal(userMeta.sources[0].url, 'https://x.com/NASA/status/2')
+    const xView = x.presentResult({}, { content: [], isError: false, meta: xMeta })
+    assert.equal(xView.card, 'web')
+    assert.equal(xView.kind, 'search')
+
+    const fetch = mock.tools.get('fetch_page')
+    assert.equal(fetch.presentCall({ url: 'https://example.com/a' }).kind, 'fetch')
+    const fetchMeta = fetch.output.presentationMeta({}, { url: 'https://example.com/a', via: 'jina', content: 'x', truncated: true })
+    const fetchView = fetch.presentResult({}, { content: [], isError: false, meta: fetchMeta })
+    assert.equal(fetchView.card, 'web')
+    assert.equal(fetchView.kind, 'fetch')
+    assert.equal(fetchView.statusCode, 200)
+    assert.equal(fetchView.truncated, true)
+  })
+
+  it('wires every registration disposer into ctx.effect (Cordis teardown)', async () => {
+    const { apply } = await import('../index.js')
+    const mock = makeMockCtx()
+    apply(mock.ctx, {})
+    // search + fetch providers, 6 tools, policy section, status variable, 3 commands
+    assert.ok(mock.disposers.length >= 12, `expected >=12 disposers, got ${mock.disposers.length}`)
+    assert.ok(mock.disposers.every((d) => typeof d === 'function'))
   })
 })
 
