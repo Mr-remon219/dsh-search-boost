@@ -517,6 +517,51 @@ describe('v0.0.5 DSH-native integration', () => {
     assert.ok(mock.disposers.length >= 12, `expected >=12 disposers, got ${mock.disposers.length}`)
     assert.ok(mock.disposers.every((d) => typeof d === 'function'))
   })
+
+  it('/x-login never records its raw input (API key hygiene)', async () => {
+    const { apply } = await import('../index.js')
+    const mock = makeMockCtx()
+    apply(mock.ctx, {})
+    const login = mock.commands.get('x-login')
+    assert.ok(login, '/x-login registered')
+    assert.equal(login.recordInput, false, 'API key must not land in the session log')
+    // invalid key is rejected without touching any state file (a valid-format
+    // key would write real state — never exercised in tests)
+    const out = login.handler({ rawInput: '-k not-a-real-key' })
+    assert.equal(out.kind, 'error')
+    assert.match(out.text, /must start with "xai-"/)
+  })
+
+  it('research tools declare result cards via presentationMeta projection', async () => {
+    const { apply } = await import('../index.js')
+    const mock = makeMockCtx()
+    apply(mock.ctx, {})
+
+    const research = mock.tools.get('deep_research')
+    const rMeta = research.output.presentationMeta({}, { round: 2, sources: [{ url: 'https://a.example' }], gaps: ['g1'], suggested_queries: ['q1'] })
+    assert.equal(rMeta.round, 2)
+    assert.equal(rMeta.sourceCount, 1)
+    const rView = research.presentResult({}, { content: [], isError: false, meta: rMeta })
+    assert.equal(rView.card, 'generic')
+    assert.match(rView.title, /round 2, 1 sources/)
+
+    const parallel = mock.tools.get('research_parallel')
+    const pMeta = parallel.output.presentationMeta({}, { sub_tasks: [{}, {}], merged_sources: ['a', 'b', 'c'] })
+    assert.equal(pMeta.taskCount, 2)
+    assert.equal(pMeta.sourceCount, 3)
+    const pView = parallel.presentResult({}, { content: [], isError: false, meta: pMeta })
+    assert.match(pView.title, /2 tasks, 3 merged sources/)
+
+    const stats = mock.tools.get('search_stats')
+    const sMeta = stats.output.presentationMeta({}, { cacheHits: 5, cacheMisses: 2, layer: 'free', grok: false, x: { source: 'none', official: false } })
+    assert.equal(sMeta.cacheHits, 5)
+    const sView = stats.presentResult({}, { content: [], isError: false, meta: sMeta })
+    assert.match(sView.title, /5 cache hits \/ 2 misses/)
+    assert.match(sView.title, /x_search fallback/)
+
+    // no meta → presentResult degrades to undefined (raw content renders)
+    assert.equal(research.presentResult({}, { content: [], isError: false }), undefined)
+  })
 })
 
 describe('v0.0.3 wiring', () => {

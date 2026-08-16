@@ -712,6 +712,9 @@ function registerXLoginCommand(ctx) {
     name: 'x-login',
     description: 'Enable the official hosted x_search path: /x-login (import your grok login from ~/.grok/auth.json), /x-login -k <XAI_API_KEY> (public api.x.ai), /x-login status. /x-logout disables it again.',
     input: { hint: '[-k <XAI_API_KEY> | status]' },
+    // the API key lives in the state file, not the session log — never record
+    // the raw input (DSH idiom: the domain event owns the payload)
+    recordInput: false,
     handler: ({ rawInput }) => {
       const parts = String(rawInput ?? '').trim().split(/\s+/)
       try {
@@ -821,6 +824,20 @@ function registerDeepResearchTool(ctx, engines) {
         type: 'text',
         text: renderResearch(value),
       }],
+      presentationMeta: (_args, value) => ({
+        round: value.round,
+        sourceCount: (value.sources ?? []).length,
+        gapsCount: (value.gaps ?? []).length,
+        suggestedCount: (value.suggested_queries ?? []).length,
+      }),
+    },
+    presentResult: (args, result) => {
+      const meta = result.meta
+      if (!meta) return undefined
+      return {
+        card: 'generic',
+        title: `deep_research: round ${meta.round}, ${meta.sourceCount} sources, ${meta.gapsCount} gaps${meta.suggestedCount ? `, ${meta.suggestedCount} suggested` : ''}`,
+      }
     },
     timeoutMs: 120000,
     isConcurrencySafe: () => true,
@@ -900,6 +917,18 @@ function registerParallelTool(ctx) {
         type: 'text',
         text: renderParallel(value),
       }],
+      presentationMeta: (_args, value) => ({
+        taskCount: (value.sub_tasks ?? []).length,
+        sourceCount: (value.merged_sources ?? []).length,
+      }),
+    },
+    presentResult: (args, result) => {
+      const meta = result.meta
+      if (!meta) return undefined
+      return {
+        card: 'generic',
+        title: `research_parallel: ${meta.taskCount} tasks, ${meta.sourceCount} merged sources`,
+      }
     },
     timeoutMs: 310000,
     isConcurrencySafe: () => true,
@@ -1027,6 +1056,20 @@ function registerStatsTool(ctx) {
           `x_search: ${value.grok ? 'official path ready' : 'fallback chain only'} (${value.x?.source ?? '?'}${value.x?.official ? ', enabled' : ', disabled'})\n` +
           `recent: ${value.recent.map((r) => `"${r.query}"(${r.tookMs}ms,${r.results}r${r.cacheHit ? ',hit' : ''})`).join(' | ')}`,
       }],
+      presentationMeta: (_args, value) => ({
+        cacheHits: value.cacheHits,
+        cacheMisses: value.cacheMisses,
+        layer: value.layer ?? 'api',
+        xOfficial: Boolean(value.grok),
+      }),
+    },
+    presentResult: (args, result) => {
+      const meta = result.meta
+      if (!meta) return undefined
+      return {
+        card: 'generic',
+        title: `search stats: ${meta.cacheHits} cache hits / ${meta.cacheMisses} misses (${meta.layer}, x_search ${meta.xOfficial ? 'official' : 'fallback'})`,
+      }
     },
     timeoutMs: 10000,
     isConcurrencySafe: () => true,
