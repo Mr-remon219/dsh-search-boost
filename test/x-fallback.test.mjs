@@ -438,12 +438,12 @@ describe('v0.0.5 DSH-native integration', () => {
     }
   })
 
-  it('registers a search:status prompt variable with the live layer + x state', async () => {
+  it('registers a search_status prompt variable with the live layer + x state', async () => {
     const { apply } = await import('../index.js')
     const mock = makeMockCtx()
     apply(mock.ctx, {})
-    const provider = mock.variables.get('search:status')
-    assert.ok(provider, 'search:status variable registered')
+    const provider = mock.variables.get('search_status')
+    assert.ok(provider, 'search_status variable registered')
     const line = provider()
     assert.match(line, /search layer: (free|api)/)
     assert.match(line, /x_search: (official path|fallback chain)/)
@@ -530,6 +530,26 @@ describe('v0.0.5 DSH-native integration', () => {
     const out = login.handler({ rawInput: '-k not-a-real-key' })
     assert.equal(out.kind, 'error')
     assert.match(out.text, /must start with "xai-"/)
+  })
+
+  it('command + variable metadata passes DSH contract validation', async () => {
+    const { apply } = await import('../index.js')
+    const mock = makeMockCtx()
+    apply(mock.ctx, {})
+    // prompt variable names must match /^[a-z][a-z0-9_]*$/ (a colon name
+    // previously made systemPrompt.variable throw at registration)
+    for (const name of mock.variables.keys()) {
+      assert.match(name, /^[a-z][a-z0-9_]*$/, `variable name "${name}" must satisfy the DSH pattern`)
+    }
+    // command input hints, when present, must be non-empty (an empty hint made
+    // commands.register throw for /x-logout)
+    for (const [name, cmd] of mock.commands) {
+      if (cmd.input) {
+        assert.ok(String(cmd.input.hint ?? '').trim().length > 0, `command "${name}" input hint must not be empty`)
+      }
+    }
+    // /x-logout carries no input descriptor at all now
+    assert.equal(mock.commands.get('x-logout').input, undefined)
   })
 
   it('research tools declare result cards via presentationMeta projection', async () => {

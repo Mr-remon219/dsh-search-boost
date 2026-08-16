@@ -202,7 +202,8 @@ function registerFetchProvider(ctx) {
 function registerStatusVariable(ctx) {
   const variable = ctx.systemPrompt?.variable
   if (typeof variable !== 'function') return undefined
-  return variable('search:status', () => {
+  // DSH requires variable names to match /^[a-z][a-z0-9_]*$/ (no colons)
+  return variable('search_status', () => {
     const layer = getLayer()
     const x = xAuthAvailableSync()
     const st = authStatus()
@@ -748,7 +749,6 @@ function registerXLogoutCommand(ctx) {
   return commands.register({
     name: 'x-logout',
     description: 'Remove the /x-login credentials: the official hosted x_search path is disabled and x_search uses only the multi-engine / guest-GraphQL / oEmbed fallback chain. grok CLI\'s own login is untouched. Usage: /x-logout',
-    input: { hint: '' },
     handler: () => {
       const removed = logout()
       return {
