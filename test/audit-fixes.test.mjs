@@ -6,7 +6,7 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { fetchPage, makePageCache } from '../lib/fetch.js'
 import { isBlockedIp, isTunFakeIp, assertPublicHttpUrl, SsrfError } from '../lib/ssrf.js'
-import { normalizeUrl, fusedSearch, TIER_ENGINES, TIER_ENGINES_FREE, tierEnginesFor, searchCacheKey, estimateComplexity } from '../lib/fusion.js'
+import { normalizeUrl, fusedSearch, TIER_ENGINES, TIER_ENGINES_FREE, tierEnginesFor, SECONDARY_VARIANTS, searchCacheKey, estimateComplexity } from '../lib/fusion.js'
 import { researchRound, parallelResearch, setTimer } from '../lib/research.js'
 import { getLayer, setLayer } from '../lib/layer.js'
 import { parseExaFreeText } from '../lib/exa-free.js'
@@ -228,6 +228,31 @@ describe('v0.0.2 web layer', () => {
     // restore to whatever the machine default was (api on fresh installs)
     setLayer(origDefault)
     assert.ok(getLayer() === 'free' || getLayer() === 'api')
+  })
+
+  it('secondary (extra-variant) wave is layer-aware: exa-free joins in free, tavily in api', async () => {
+    // secondaryPool drives the 2nd/3rd variants; a medium query yields 2+ variants
+    assert.ok(SECONDARY_VARIANTS.free.includes('exa-free'))
+    assert.ok(!SECONDARY_VARIANTS.free.includes('tavily'))
+    assert.ok(SECONDARY_VARIANTS.api.includes('tavily'))
+    assert.ok(SECONDARY_VARIANTS.api.includes('exa-free'))
+
+    const perVariant = {}
+    const collect = (engine, variant) => {
+      perVariant[variant] = perVariant[variant] ?? new Set()
+      perVariant[variant].add(engine)
+    }
+    await fusedSearch({
+      query: 'tokio runtime',
+      queries: ['tokio async runtime features', 'tokio architecture'],
+      layer: 'free',
+      tier: 'medium', // 2+ variants
+      runOne: async (engine, q) => { collect(engine, q); return [] },
+    })
+    const freeVariants = Object.values(perVariant)
+    assert.ok(freeVariants.length >= 2, `expected >=2 variants, got ${JSON.stringify(perVariant)}`)
+    // exa-free must be reachable across the (possibly multiple) variants
+    assert.ok(Object.values(perVariant).some((s) => s.has('exa-free')))
   })
 })
 
