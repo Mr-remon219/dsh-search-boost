@@ -6,6 +6,7 @@
   "main": "index.js",
   "scripts": {
     "test": "node --test test/*.test.mjs",
+    "test:e2e": "node scripts/blackbox-e2e.mjs",
     "audit:verify": "node scripts/verify-audit.mjs",
     "prepublishOnly": "node scripts/verify-publish.mjs"
   },
@@ -15,6 +16,9 @@
     "cordis.patch.yml",
     "search-boost-keys.example.json",
     "README.md",
+    "README_zh.md",
+    "install.sh",
+    "install.ps1",
     "LICENSE"
   ],
   "keywords": [
