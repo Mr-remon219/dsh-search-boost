@@ -18,7 +18,7 @@ import { fusedSearch, makeCache, estimateComplexity, TIER_ENGINES, TIER_ENGINES_
 import { fetchPage, makePageCache } from './lib/fetch.js'
 import { runXTool, xAuthAvailableSync } from './lib/xsearch.js'
 import { fallbackXSearch, hitToPost } from './lib/xfallback.js'
-import { authStatus, importFromGrok, importApiKey, logout, piAuthPath, jwtTier, tierName } from './lib/xauth.js'
+import { authStatus, importFromGrok, importApiKey, logout, piAuthPath } from './lib/xauth.js'
 import { SEARCH_POLICY_SECTION } from './lib/policy.js'
 import { researchRound, parallelResearch, setTimer } from './lib/research.js'
 import { getLayer, setLayer, LAYER_LABELS } from './lib/layer.js'
@@ -28,6 +28,16 @@ export const inject = ['web', 'tools', 'systemPrompt']
 
 const SEARCH_CACHE = makeCache()
 const PAGE_CACHE = makePageCache()
+// Per-kind TTL cache for x_search: real-time X data is cached briefly so
+// repeated identical queries do not re-run the slow hosted tool or re-hit
+// engines (keyword/semantic 5min, user 10min, thread 15min — mirrors the pi
+// extension's TTLs). Cache hits short-circuit before the credential preflight.
+const X_CACHE = {
+  keyword: makeCache(5 * 60 * 1000),
+  semantic: makeCache(5 * 60 * 1000),
+  user: makeCache(10 * 60 * 1000),
+  thread: makeCache(15 * 60 * 1000),
+}
 const stats = { startedAt: new Date().toISOString(), cacheHits: 0, cacheMisses: 0, tierCounts: {}, recent: [] }
 
 export function apply(ctx, config = {}) {
@@ -44,7 +54,7 @@ export function apply(ctx, config = {}) {
   safe('searchProvider', () => { if (config.searchProvider !== false) registerSearchProvider(ctx, engines) })
   safe('fused_search', () => { if (config.fusedSearch !== false) registerFusedSearchTool(ctx, engines) })
   safe('fetch_page', () => { if (config.fetchPage !== false) registerFetchPageTool(ctx) })
-  safe('x_search', () => { if (config.xSearch !== false) registerXSearchTool(ctx) })
+  safe('x_search', () => { if (config.xSearch !== false) registerXSearchTool(ctx, engines) })
   safe('deep_research', () => { if (config.deepResearch !== false) registerDeepResearchTool(ctx, engines) })
   safe('research_parallel', () => { if (config.researchParallel !== false) registerParallelTool(ctx) })
   safe('search_stats', () => { if (config.searchStats !== false) registerStatsTool(ctx) })
@@ -343,7 +353,7 @@ function registerFetchPageTool(ctx) {
 
 const X_MODES = ['keyword', 'semantic', 'user', 'thread']
 
-function registerXSearchTool(ctx) {
+function registerXSearchTool(ctx, engines) {
   ctx.tools.register({
     name: 'x_search',
     description:
@@ -379,6 +389,7 @@ function registerXSearchTool(ctx) {
           credential: { type: 'string' },
           note: { type: 'string' },
           error: { type: 'string' },
+          cacheHit: { type: 'boolean' },
           xResults: { type: 'number' },
           engineResults: { type: 'number' },
           items: {
@@ -403,6 +414,18 @@ function registerXSearchTool(ctx) {
       if (!subj) throw new Error('x_search: provide query (keyword/semantic/user) or post_id (thread).')
       const maxResults = Math.min(Math.max(args.max_results ?? 5, 1), 10)
 
+      // per-kind TTL cache: repeated identical queries short-circuit here
+      const cacheKey = JSON.stringify({
+        kind, q: args.query ?? null, u: args.username ?? null, pid: args.post_id ?? null,
+        fd: args.from_date ?? null, td: args.to_date ?? null, m: maxResults,
+      })
+      const cached = X_CACHE[kind].get(cacheKey)
+      if (cached) return { ...cached, cacheHit: true, tookMs: 0 }
+      const remember = (out) => {
+        if (out.via !== 'error' && out.results > 0) X_CACHE[kind].set(cacheKey, out)
+        return out
+      }
+
       const engineSearch = (q, n) => domainSearch(engines, { query: q, maxResults: n, signal })
       const webSearch = (q, n) =>
         engineSearch(q, n).then((hits) => hits.map((h) => ({ title: h.title, url: h.url, snippet: h.snippet, domain: h.domain })))
@@ -420,14 +443,14 @@ function registerXSearchTool(ctx) {
             webSearch,
           })
           const items = Array.isArray(fb.data) ? fb.data : [fb.data]
-          return {
+          return remember({
             via: `fallback:${fb.via}`,
             results: items.length,
             tookMs: Date.now() - started,
             credential: `fallback:${fb.via}`,
             note: `primary failed: ${String(primaryErr).slice(0, 200)}`,
             items,
-          }
+          })
         } catch (fbErr) {
           const msg = `${String(primaryErr)} | fallback: ${fbErr instanceof Error ? fbErr.message : String(fbErr)}`
           return { via: 'error', results: 0, tookMs: Date.now() - started, error: msg, items: [] }
@@ -471,7 +494,7 @@ function registerXSearchTool(ctx) {
             : []
           const merged = [...xPosts, ...extra]
           const credential = xOutcome.value.credential + (extra.length ? ' + multi-engine parallel' : '')
-          return {
+          return remember({
             via: 'parallel',
             results: merged.length,
             tookMs: Date.now() - started,
@@ -479,7 +502,7 @@ function registerXSearchTool(ctx) {
             xResults: xPosts.length,
             engineResults: extra.length,
             items: merged,
-          }
+          })
         }
         return runFallback(xOutcome.reason instanceof Error ? xOutcome.reason.message : String(xOutcome.reason))
       }
@@ -497,7 +520,7 @@ function registerXSearchTool(ctx) {
           signal,
         )
         const items = Array.isArray(res.data) ? res.data : [res.data]
-        return { via: res.credential, results: items.length, tookMs: res.tookMs, credential: res.credential, items }
+        return remember({ via: res.credential, results: items.length, tookMs: res.tookMs, credential: res.credential, items })
       } catch (err) {
         return runFallback(err instanceof Error ? err.message : String(err))
       }
@@ -518,7 +541,7 @@ function renderItem(item) {
 
 function renderX(value) {
   const lines = []
-  lines.push(`**x_search** — via ${value.via}, ${value.results} result(s), ${value.tookMs}ms`)
+  lines.push(`**x_search** — via ${value.via}, ${value.results} result(s), ${value.tookMs}ms${value.cacheHit ? ' (cache hit)' : ''}`)
   if (value.note) lines.push(`note: ${value.note}`)
   if (value.error) {
     lines.push(`ERROR: ${value.error}`)
