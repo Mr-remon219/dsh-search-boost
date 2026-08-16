@@ -25,12 +25,24 @@ A **bundle plugin** for DSH that upgrades the built-in `web_search` and register
 
 ## Installation (bundle — recommended)
 
-**One command** (after publishing, or from a local git source):
+**From npm (recommended for users — published release):**
 
 ```sh
-dsh plugin add github:Mr-remon219/dsh-search-boost    # published
-dsh plugin --profile web add git+file:///path/to/repo # local git source (protocol verified)
+dsh plugin add dsh-search-boost          # latest
+dsh plugin add dsh-search-boost@0.0.2    # pin a version
 ```
+
+npm-sourced installs are versioned and independent of any local checkout; the registry package always matches a committed, tested tree (enforced by the `prepublishOnly` gate).
+
+**From source (development / latest git):**
+
+```sh
+dsh plugin add github:Mr-remon219/dsh-search-boost        # latest main
+dsh plugin add github:Mr-remon219/dsh-search-boost#<hash> # pin a commit
+dsh plugin --profile web add git+file:///path/to/repo     # local git source (protocol verified)
+```
+
+Git/local sources are ideal for iterating on fixes: edit → restart → verify.
 
 Or run the install script from the repo (syntax check → key setup → install → verification):
 
@@ -140,9 +152,19 @@ lib/policy.js               — proactive-search policy section text
 cordis.patch.yml            — patch layer (web.searchProvider + plugin row)
 package.json                — bundle manifest (dsh.bundle.patch)
 install.ps1 / install.sh    — one-command install scripts
+scripts/verify-publish.mjs  — pre-publish gate (syntax + tests + clean tree)
 search-boost-keys.example.json — key file example
 plugin-host.js              — alternative session-level dynamic plugin (full source)
 ```
+
+## Publishing (maintainers)
+
+```sh
+npm test      # run the test suite
+npm publish   # prepublishOnly gate: syntax check + tests + clean-tree check
+```
+
+`npm publish` runs the `prepublishOnly` gate automatically: it aborts on a syntax error, a failing test, or a dirty working tree (`DSH_SB_ALLOW_DIRTY=1` forces through), so the registry tarball always matches the committed repo. After publishing, `dsh plugin add dsh-search-boost` installs the release.
 
 ## License
 

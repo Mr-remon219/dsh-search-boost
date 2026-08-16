@@ -23,12 +23,24 @@
 
 ## 安装（bundle，推荐）
 
-**一条命令**（发布后，或本地 git 源）：
+**从 npm 安装（推荐给使用者 —— 已发布版本）：**
 
 ```sh
-dsh plugin add github:Mr-remon219/dsh-search-boost    # 发布后
-dsh plugin --profile web add git+file:///path/to/repo # 本地 git 源（协议已实测）
+dsh plugin add dsh-search-boost          # 最新版
+dsh plugin add dsh-search-boost@0.0.2    # 锁定版本
 ```
+
+npm 安装按版本分发、不依赖任何本地 checkout；registry 上的包永远对应一个已提交、已测试的工作树（由 `prepublishOnly` 门禁保证）。
+
+**从源码安装（开发 / 最新 git）：**
+
+```sh
+dsh plugin add github:Mr-remon219/dsh-search-boost        # 最新 main
+dsh plugin add github:Mr-remon219/dsh-search-boost#<hash> # 锁定 commit
+dsh plugin --profile web add git+file:///path/to/repo     # 本地 git 源（协议已实测）
+```
+
+git/本地源适合开发迭代：改完 → 重启 → 验证。
 
 或者直接运行仓库内的安装脚本（语法校验 → key 配置 → 安装 → 验证）：
 
@@ -134,9 +146,19 @@ lib/policy.js               — 主动搜索守则文本
 cordis.patch.yml            — patch 层（web.searchProvider + 插件行）
 package.json                — bundle 清单（dsh.bundle.patch）
 install.ps1 / install.sh    — 一键安装脚本
+scripts/verify-publish.mjs  — 发布前门禁（语法 + 测试 + 工作树干净）
 search-boost-keys.example.json — key 配置文件示例
 plugin-host.js              — 备选会话级动态插件（完整源码）
 ```
+
+## 发布（维护者）
+
+```sh
+npm test      # 跑测试套件
+npm publish   # prepublishOnly 门禁：语法 + 测试 + 工作树干净
+```
+
+`npm publish` 会自动执行 `prepublishOnly` 门禁：语法错误、测试失败、工作树不干净（有未提交改动）都会中止发布（`DSH_SB_ALLOW_DIRTY=1` 可强制放行），保证 registry 上的包与已提交的仓库永远一致。发布后 `dsh plugin add dsh-search-boost` 即可安装该版本。
 
 ## License
 
