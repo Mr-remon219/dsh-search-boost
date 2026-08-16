@@ -369,3 +369,80 @@ describe('audit follow-ups', () => {
     assert.equal(result.engineStats.ddg, undefined)
   })
 })
+
+describe('search truncation flags', () => {
+  const makeHits = (n) => Array.from({ length: n }, (_, i) => ({
+    title: `Hit ${i}`,
+    url: `https://site${i}.example.com/page`,
+    snippet: 'snippet text',
+  }))
+
+  it('truncated=false when returned count equals limit and no more eligible results', async () => {
+    const result = await fusedSearch({
+      query: 'truncation exact cap',
+      engines: ['bing'],
+      maxResults: 3,
+      runOne: async () => makeHits(3),
+    })
+    assert.equal(result.results.length, 3)
+    assert.equal(result.truncated, false)
+  })
+
+  it('truncated=true only when more eligible results exist beyond the cap', async () => {
+    const result = await fusedSearch({
+      query: 'truncation overflow',
+      engines: ['bing'],
+      maxResults: 3,
+      runOne: async () => makeHits(8),
+    })
+    assert.equal(result.results.length, 3)
+    assert.equal(result.truncated, true)
+  })
+
+  it('truncated=false when fewer results than the limit', async () => {
+    const result = await fusedSearch({
+      query: 'truncation underfill',
+      engines: ['bing'],
+      maxResults: 6,
+      runOne: async () => makeHits(2),
+    })
+    assert.equal(result.results.length, 2)
+    assert.equal(result.truncated, false)
+  })
+
+  it('clamps maxResults=0 to 1 instead of returning a stray hit', async () => {
+    const result = await fusedSearch({
+      query: 'truncation zero clamp',
+      engines: ['bing'],
+      maxResults: 0,
+      runOne: async () => makeHits(5),
+    })
+    assert.equal(result.results.length, 1)
+    assert.equal(result.truncated, true)
+  })
+
+  it('fused_search presentationMeta uses fusion truncated, not args mismatch', async () => {
+    const { apply } = await import('../index.js')
+    const tools = new Map()
+    const ctx = {
+      effect: () => {},
+      get: () => undefined,
+      web: { registerSearchProvider: () => {}, registerFetchProvider: () => {} },
+      tools: { register: (t) => { tools.set(t.name, t); return () => {} } },
+      systemPrompt: { section: () => () => {} },
+    }
+    apply(ctx, {})
+    const fused = tools.get('fused_search')
+    const value = {
+      query: 'tokio',
+      results: makeHits(6).map((h, i) => ({ ...h, domain: `site${i}.example.com`, engines: ['bing'] })),
+      truncated: false,
+      tookMs: 1,
+      tier: 'simple',
+    }
+    const metaMismatch = fused.output.presentationMeta({ query: 'tokio', max_results: 3 }, value)
+    assert.equal(metaMismatch.truncated, false, 'must not re-derive truncated from args when fusion says false')
+    const metaOverflow = fused.output.presentationMeta({ query: 'tokio', max_results: 6 }, { ...value, truncated: true })
+    assert.equal(metaOverflow.truncated, true)
+  })
+})
