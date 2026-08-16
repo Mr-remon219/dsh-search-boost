@@ -106,7 +106,7 @@ Write-Host "      pnpm: $($pnpm.Source)" -ForegroundColor Green
 $node = Get-Command node -ErrorAction SilentlyContinue
 if ($node) {
   Write-Host "[2/3] 校验源码语法 ..." -ForegroundColor Yellow
-  foreach ($f in @("index.js", "lib\engines.js", "lib\fusion.js", "lib\fetch.js", "lib\grok.js", "lib\policy.js")) {
+  foreach ($f in @("index.js", "lib\engines.js", "lib\exa-free.js", "lib\layer.js", "lib\fusion.js", "lib\fetch.js", "lib\grok.js", "lib\policy.js")) {
     & $node.Source --check (Join-Path $Repo $f) 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) { Write-Error "语法校验失败: $f"; exit 1 }
   }

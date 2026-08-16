@@ -6,8 +6,10 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { fetchPage, makePageCache } from '../lib/fetch.js'
 import { isBlockedIp, isTunFakeIp, assertPublicHttpUrl, SsrfError } from '../lib/ssrf.js'
-import { normalizeUrl, fusedSearch, TIER_ENGINES, searchCacheKey, estimateComplexity } from '../lib/fusion.js'
+import { normalizeUrl, fusedSearch, TIER_ENGINES, TIER_ENGINES_FREE, tierEnginesFor, searchCacheKey, estimateComplexity } from '../lib/fusion.js'
 import { researchRound, parallelResearch, setTimer } from '../lib/research.js'
+import { getLayer, setLayer } from '../lib/layer.js'
+import { parseExaFreeText } from '../lib/exa-free.js'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const indexSrc = readFileSync(join(root, 'index.js'), 'utf8')
@@ -174,8 +176,9 @@ describe('P1-6 cache key includes tier', () => {
 
 describe('P1-8 / P1-9 / P1-11 / P1-13 wiring', () => {
   it('drops agy from simple and shares cache + signal + ddg stats', () => {
-    assert.deepEqual(TIER_ENGINES.simple, ['bing', 'ddg'])
+    assert.deepEqual(TIER_ENGINES.simple, ['bing', 'ddg', 'exa-free'])
     assert.ok(TIER_ENGINES.medium.includes('antigravity'))
+    assert.ok(TIER_ENGINES.simple.includes('exa-free'))
     const provider = indexSrc.slice(indexSrc.indexOf('function registerSearchProvider'), indexSrc.indexOf('// ---------- fused_search tool'))
     assert.equal(/tier: 'simple'/.test(provider), false)
     assert.equal(/runFused\(/.test(provider), true)
@@ -197,5 +200,92 @@ describe('P1-8 / P1-9 / P1-11 / P1-13 wiring', () => {
       },
     })
     assert.equal(seen, ac.signal)
+  })
+})
+
+// ---------- v0.0.2: layers + exa-free ----------
+
+describe('v0.0.2 web layer', () => {
+  it('free tier tables use only keyless engines', () => {
+    const keyed = ['tavily', 'brave', 'exa']
+    for (const tier of ['simple', 'medium', 'complex']) {
+      for (const e of TIER_ENGINES_FREE[tier]) {
+        assert.equal(keyed.includes(e), false, `free tier ${tier} must not contain keyed engine ${e}`)
+      }
+    }
+    assert.deepEqual(TIER_ENGINES_FREE.simple, ['bing', 'ddg', 'exa-free'])
+    assert.ok(tierEnginesFor('free', 'complex').every((e) => !keyed.includes(e)))
+    assert.ok(tierEnginesFor('api', 'complex').includes('tavily'))
+    assert.ok(tierEnginesFor('free', 'complex').includes('exa-free'))
+  })
+
+  it('round-trips layer state, restoring the original default afterwards', () => {
+    const origDefault = getLayer() // reads the real state file (or "api")
+    setLayer('free')
+    assert.equal(getLayer(), 'free')
+    setLayer('api')
+    assert.equal(getLayer(), 'api')
+    // restore to whatever the machine default was (api on fresh installs)
+    setLayer(origDefault)
+    assert.ok(getLayer() === 'free' || getLayer() === 'api')
+  })
+})
+
+describe('v0.0.2 free-layer engine guard', () => {
+  it('never dials keyed engines in free mode even if requested', async () => {
+    const invoked = []
+    const result = await fusedSearch({
+      query: 'tokio runtime',
+      layer: 'free',
+      engines: ['tavily', 'brave', 'exa'], // keyed-only request
+      tier: 'simple',
+      runOne: async (engine, _q, _n) => {
+        invoked.push(engine)
+        return []
+      },
+    })
+    // free layer must substitute the keyless tier pool, never the keyed ones
+    assert.ok(invoked.every((e) => !['tavily', 'brave', 'exa'].includes(e)), `invoked keyed engines: ${invoked}`)
+    assert.ok(['bing', 'ddg', 'exa-free'].some((e) => invoked.includes(e)), `expected free legs, got ${invoked}`)
+    assert.ok(result.warnings.length === 0)
+  })
+
+  it('falls back to keyless exa-free with a warning when the layer pool is empty', async () => {
+    const result = await fusedSearch({
+      query: 'tokio runtime',
+      layer: 'free',
+      engines: [], // empty request → layer default pool is substituted (non-empty)
+      tier: 'simple',
+      runOne: async () => [],
+    })
+    // 'free' default pool (bing/ddg/exa-free) is non-empty, so no warning expected
+    assert.equal(result.warnings.length, 0)
+  })
+})
+
+describe('v0.0.2 exa-free parser', () => {
+  it('parses Title/URL/Highlights blocks', () => {
+    const md = [
+      'Title: Tokio 1.53.1',
+      'URL: https://github.com/tokio-rs/tokio/releases/tag/tokio-1.53.1',
+      'Highlights: async runtime, released 2026-07-20',
+      '',
+      '---',
+      '',
+      'Title: crates.io tokio',
+      'URL: https://crates.io/crates/tokio',
+      'Highlights: Rust package registry',
+    ].join('\n')
+    const hits = parseExaFreeText(md)
+    assert.equal(hits.length, 2)
+    assert.equal(hits[0].url, 'https://github.com/tokio-rs/tokio/releases/tag/tokio-1.53.1')
+    assert.match(hits[0].snippet, /async runtime/)
+  })
+
+  it('falls back to markdown links when no blocks parse', () => {
+    const hits = parseExaFreeText('See [Tokio](https://tokio.rs) and [docs](https://docs.rs/tokio).')
+    assert.ok(hits.length >= 2)
+    assert.equal(hits[0].title, 'Tokio')
+    assert.equal(hits[0].url, 'https://tokio.rs')
   })
 })

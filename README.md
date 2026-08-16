@@ -4,7 +4,8 @@
 
 A **bundle plugin** for DSH that upgrades the built-in `web_search` and registers a family of search tools:
 
-- Free-by-default engines run **in parallel**: **Antigravity CLI / Bing / DuckDuckGo** (all keyless), with keyed **Tavily / Brave / Exa** joining when keys are present.
+- Free-by-default engines run **in parallel**: **Antigravity CLI / Bing / DuckDuckGo / Exa MCP (exa-free)** (all keyless), with keyed **Tavily / Brave / Exa** joining when keys are present.
+- **Two search layers, switched with `/web_change`**: `free` (keyless engines only — no credits, ideal for research loops) vs `api` (full pool incl. keyed Tavily / Brave / Exa). Choice persists across reloads.
 - Fused multi-engine ranking with cross-engine co-occurrence scoring and time-decay freshness.
 - Deep research driven by the main agent, and parallel research fanned out to native DSH subagents.
 
@@ -13,7 +14,8 @@ A **bundle plugin** for DSH that upgrades the built-in `web_search` and register
 | Capability | Description |
 |---|---|
 | **Built-in `web_search` upgrade** | Registers a `WebSearchProvider` and patches `searchProvider`, so the built-in `web_search` runs on this plugin's free-first engine chain (native citation cards preserved) |
-| `fused_search` | Multi-engine fused retrieval: free engines run **in parallel** (Antigravity CLI / Bing / DuckDuckGo — all keyless, two are plain curl scrapes), keyed engines join when keys exist (Tavily / Brave / Exa). Complexity routing, Grok-style query preprocessing (`site:` / `OR` / quotes), hard domain filters, half-life time-decay freshness, cross-engine co-occurrence scoring, 6h TTL cache |
+| `fused_search` | Multi-engine fused retrieval: free engines run **in parallel** (Antigravity CLI / Bing / DuckDuckGo / Exa MCP — all keyless), keyed engines join when keys exist (Tavily / Brave / Exa). The active layer (free vs api) is switched with `/web_change`; `layer` can be overridden per call. Complexity routing, Grok-style query preprocessing (`site:` / `OR` / quotes), hard domain filters, half-life time-decay freshness, cross-engine co-occurrence scoring, 6h TTL cache |
+| `/web_change` | Switch the search layer at runtime: `/web_change free` (keyless only: agy/bing/ddg/exa-free) or `/web_change api` (full pool). `/web_change show` reports the current layer and which engines are available. Persisted to `~/.dsh-search-boost-layer.json` so it survives reloads |
 | `x_search` | X/Twitter search via the local Grok Build CLI (`~/.grok/auth.json` login state). Returns structured evidence (summary + posts + uncertainty); degrades gracefully after a 45s timeout when there is no subscription, never blocks the call |
 | `fetch_page` | Jina Reader content extraction + local HTML fallback + `focus`-based topic extraction (saves ~90% tokens) + 24h cache |
 | `deep_research` | Step-mode deep research: complex fused search + coverage analysis + cross-domain corroboration stats + gaps + suggested queries, **driven by the main agent in rounds until convergence** |
@@ -100,7 +102,7 @@ The published bundle contains **no secrets**. The bundle runs in the host proces
 
 2. Environment variable fallback: `TAVILY_API_KEY` / `EXA_API_KEY` / `BRAVE_API_KEY`
 
-Engines without a key are automatically dropped from the fan-out. **Free engines need no configuration at all**: Antigravity CLI (macOS/Linux — install once, sign in once in the browser), Bing (zero-config) and DuckDuckGo (zero-config) work out of the box, and the keyless ones run in parallel so a single-engine failure never leaves you empty-handed. X search requires Grok Build installed locally and signed in (SuperGrok / X Premium subscription).
+Engines without a key are automatically dropped from the fan-out. **Free engines need no configuration at all**: Antigravity CLI (macOS/Linux — install once, sign in once in the browser), Bing, DuckDuckGo and Exa MCP (exa-free) work out of the box, and the keyless ones run in parallel so a single-engine failure never leaves you empty-handed. In the `free` layer only these keyless engines are dialed; the `api` layer adds the keyed Tavily / Brave / Exa when keys are present. X search requires Grok Build installed locally and signed in (SuperGrok / X Premium subscription).
 
 ## Verified benchmarks (2026-08, Windows + headless)
 
@@ -108,8 +110,9 @@ Engines without a key are automatically dropped from the fan-out. **Free engines
 |---|---|
 | `dsh plugin add` install + patch layer applied | ✓ (`dump-config` confirms `searchProvider` rewritten + plugin row inserted) |
 | Headless end-to-end `web_search` | ✓ (headless-runner embedded in profile, runs on the free Bing chain) |
-| No-key parallel fan-out | Zero keys, simple tier: bing + DuckDuckGo run in parallel (measured 1.7s, 6 fused hits, 0 engine errors); agy joins from the medium tier; quality improves further with keyed engines |
-| SSRF vs Clash TUN fake-ip | Literal 198.18/15 (RFC 2544) targets are blocked; hostname resolution that lands entirely in 198.18/15 is treated as TUN fake-ip and allowed (the TUN device routes to the real host); opt out with `DSH_SEARCH_ALLOW_TUN_FAKEIP=0`. Measured: fetch_page github.com 953ms via Jina on a fake-ip machine |
+| No-key parallel fan-out | Zero keys, simple tier: bing + DuckDuckGo + exa-free run in parallel; agy joins from the medium tier; a cross-engine hit (ddg + exa-free) out-ranks single-engine ones |
+| `free` vs `api` layer | `free` uses only keyless engines (measured: bing + ddg + exa-free fused a "tokio latest version" query to 5 hits in ~3.0s with the correct entities); `api` adds keyed engines and cross-engine `ddg+exa-free+tavily+brave+exa` corroboration (score 8.29 vs free layer 3.44) |
+| Dead-pool guard | A free-layer call that requests only keyed engines never dials a keyed engine and falls back to the layer's keyless pool instead of returning empty |
 | SSRF vs Clash TUN fake-ip | Literal 198.18/15 (RFC 2544) targets are blocked; hostname resolution that lands entirely in 198.18/15 is treated as TUN fake-ip and allowed (the TUN device routes to the real host); opt out with `DSH_SEARCH_ALLOW_TUN_FAKEIP=0`. Measured: fetch_page github.com 953ms via Jina on a fake-ip machine |
 | `deep_research` (bundle) | 18s per round: tokio v1.53.1 conclusion + cross-source corroboration + complete gaps/suggested_queries |
 | `research_parallel` (bundle) | 2 subagents in parallel, 53.6s: 10 first-party sources (changelog / crates.io / GitHub cross-consistent) |
@@ -125,9 +128,11 @@ Engines without a key are automatically dropped from the fan-out. **Free engines
 ## Files
 
 ```
-index.js                    — bundle plugin entry (provider + tool registration + policy injection)
+index.js                    — bundle plugin entry (provider + tools + /web_change command + policy injection)
 lib/engines.js              — key loading + engine chain with failover
-lib/fusion.js               — fused scoring / cache
+lib/exa-free.js             — Exa MCP keyless engine (free layer quality leg)
+lib/layer.js                — free/api search-layer state, switched by /web_change (persisted)
+lib/fusion.js               — fused scoring / tier tables / cache
 lib/fetch.js                — Jina Reader + local fallback + focus extraction
 lib/grok.js                 — X (Twitter) search via Grok Build CLI
 lib/research.js             — deep_research round + research_parallel fan-out

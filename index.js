@@ -12,11 +12,12 @@
 // child_process directly — no sandbox shell indirection needed.
 
 import { loadKeys, engineRegistry, ENGINE_ORDER } from './lib/engines.js'
-import { fusedSearch, makeCache, estimateComplexity, TIER_ENGINES, searchCacheKey } from './lib/fusion.js'
+import { fusedSearch, makeCache, estimateComplexity, TIER_ENGINES, TIER_ENGINES_FREE, searchCacheKey } from './lib/fusion.js'
 import { fetchPage, makePageCache } from './lib/fetch.js'
 import { searchX, grokAvailable } from './lib/grok.js'
 import { SEARCH_POLICY_SECTION } from './lib/policy.js'
 import { researchRound, parallelResearch, setTimer } from './lib/research.js'
+import { getLayer, setLayer, LAYER_LABELS } from './lib/layer.js'
 
 export const name = 'dsh-search-boost'
 export const inject = ['web', 'tools', 'systemPrompt']
@@ -44,6 +45,7 @@ export function apply(ctx, config = {}) {
   safe('research_parallel', () => { if (config.researchParallel !== false) registerParallelTool(ctx) })
   safe('search_stats', () => { if (config.searchStats !== false) registerStatsTool(ctx) })
   safe('policy section', () => ctx.systemPrompt?.section(SEARCH_POLICY_SECTION))
+  safe('web_change command', () => registerWebChangeCommand(ctx))
   try {
     setTimer((ms) => ctx.timeout(ms))
   } catch (err) {
@@ -61,9 +63,15 @@ function runEngine(engines, engineName, q, n, o) {
   return engine.search(q, n, o)
 }
 
-async function runFused(engines, { query, queries, engineList, maxResults, includeDomains, excludeDomains, recency, complexity = 'auto', signal }) {
+function layerTierTable(layer) {
+  return layer === 'free' ? TIER_ENGINES_FREE : TIER_ENGINES
+}
+
+async function runFused(engines, { query, queries, engineList, maxResults, includeDomains, excludeDomains, recency, complexity = 'auto', layer = null, signal }) {
+  const active = layer ?? getLayer()
   const resolvedTier = complexity === 'auto' ? estimateComplexity(query) : complexity
-  const engineNames = availableEngines(engines, engineList ?? TIER_ENGINES[resolvedTier] ?? TIER_ENGINES.simple)
+  const tierTable = layerTierTable(active)
+  const engineNames = availableEngines(engines, engineList ?? tierTable[resolvedTier] ?? tierTable.simple)
   const key = searchCacheKey({
     query,
     queries: queries ?? [],
@@ -73,11 +81,12 @@ async function runFused(engines, { query, queries, engineList, maxResults, inclu
     recency: recency ?? null,
     maxResults,
     tier: resolvedTier,
+    layer: active,
   })
   const cached = SEARCH_CACHE.get(key)
   if (cached) {
     stats.cacheHits++
-    stats.recent.unshift({ query, tookMs: 0, results: cached.results.length, cacheHit: true })
+    stats.recent.unshift({ query, layer: active, tookMs: 0, results: cached.results.length, cacheHit: true })
     if (stats.recent.length > 20) stats.recent.pop()
     return { ...cached, cacheHit: true, tookMs: 0 }
   }
@@ -91,11 +100,13 @@ async function runFused(engines, { query, queries, engineList, maxResults, inclu
     excludeDomains,
     recency,
     tier: resolvedTier,
+    layer: active,
     signal,
     runOne: (engineName, q, n, o) => runEngine(engines, engineName, q, n, o),
   })
+  result.layer = active
   stats.tierCounts[result.tier] = (stats.tierCounts[result.tier] ?? 0) + 1
-  stats.recent.unshift({ query, tookMs: result.tookMs, results: result.results.length, cacheHit: false })
+  stats.recent.unshift({ query, layer: active, tookMs: result.tookMs, results: result.results.length, cacheHit: false })
   if (stats.recent.length > 20) stats.recent.pop()
   SEARCH_CACHE.set(key, result)
   return result
@@ -110,8 +121,8 @@ function registerSearchProvider(ctx, engines) {
     async search(request, signal) {
       const count = Math.min(request.maxResults ?? 6, 10)
       // Parallel fan-out over available engines for the query's complexity
-      // tier (simple = bing+ddg; keyed / agy join on medium+). Shares the
-      // same 6h cache as fused_search. NOTE: do not add a deepseek-native
+      // tier (simple = bing+ddg+exa-free; agy and keyed engines join on
+      // medium+). Shares the same 6h cache as fused_search. NOTE: do not add a deepseek-native
       // engine here — ctx.web.search resolves the configured seam (which is
       // this provider after our patch) and would recurse into itself.
       const result = await runFused(engines, {
@@ -150,8 +161,8 @@ function registerFusedSearchTool(ctx, engines) {
   ctx.tools.register({
     name: 'fused_search',
     description:
-      'Multi-engine fused web search (free engines run in parallel: Antigravity CLI / Bing / DuckDuckGo — all keyless; ' +
-      'keyed Tavily / Brave / Exa join when keys exist). ' +
+      'Multi-engine fused web search in parallel (free legs: Antigravity CLI / Bing / DuckDuckGo / Exa MCP — all keyless; ' +
+      'keyed Tavily / Brave / Exa join in the api layer). The active layer (free = keyless only, api = full pool) is switched with /web_change. ' +
       'CALL THIS BEFORE ANSWERING any fact that may be stale or external to the conversation: versions, release dates, ' +
       'current status, prices, API changes, benchmarks, comparisons, or anything quoted from another source — do not answer from memory. ' +
       'Beyond a trivial one-line lookup, prefer this over web_search: it runs query variants across engines, dedupes URLs, ' +
@@ -163,12 +174,13 @@ function registerFusedSearchTool(ctx, engines) {
       properties: {
         query: { type: 'string', description: 'The search query (supports site:, -site:, "phrase", A OR B).' },
         queries: { type: 'array', items: { type: 'string' }, description: 'Optional extra query variants (max 3 total).' },
-        engines: { type: 'array', items: { type: 'string', enum: ENGINE_ORDER }, description: 'Engines to use (default by complexity tier).' },
+        engines: { type: 'array', items: { type: 'string', enum: ENGINE_ORDER }, description: 'Engines to use (default by complexity tier and active layer; see /web_change).' },
         max_results: { type: 'number', description: 'Max results to return (default 6, max 10).' },
         include_domains: { type: 'array', items: { type: 'string' }, description: 'Only keep results from these domains (subdomain match).' },
         exclude_domains: { type: 'array', items: { type: 'string' }, description: 'Drop results from these domains (subdomain match).' },
         recency: { type: 'string', enum: ['day', 'week', 'month', 'year'], description: 'Recency window; older results decay exponentially.' },
         complexity: { type: 'string', enum: ['auto', 'simple', 'medium', 'complex'], description: 'Search budget (auto by default).' },
+        layer: { type: 'string', enum: ['free', 'api'], description: 'Override the active layer for this call only (default: current /web_change layer).' },
       },
       required: ['query'],
     },
@@ -180,6 +192,8 @@ function registerFusedSearchTool(ctx, engines) {
           query: { type: 'string' },
           queriesUsed: { type: 'array', items: { type: 'string' } },
           tier: { type: 'string' },
+          layer: { type: 'string' },
+          warnings: { type: 'array', items: { type: 'string' } },
           engineStats: { type: 'object' },
           results: {
             type: 'array',
@@ -216,6 +230,7 @@ function registerFusedSearchTool(ctx, engines) {
         excludeDomains: args.exclude_domains,
         recency: args.recency,
         complexity: args.complexity ?? 'auto',
+        layer: args.layer ?? null,
         signal: exec?.signal,
       })
     },
@@ -224,7 +239,7 @@ function registerFusedSearchTool(ctx, engines) {
 
 function renderFused(value) {
   const lines = []
-  lines.push(`**fused_search: "${value.query}"** — tier ${value.tier}, ${value.results.length} hits, ${value.tookMs}ms${value.cacheHit ? ' (cache hit)' : ''}`)
+  lines.push(`**fused_search: "${value.query}"** — layer ${value.layer ?? 'api'}, tier ${value.tier}, ${value.results.length} hits, ${value.tookMs}ms${value.cacheHit ? ' (cache hit)' : ''}`)
   for (const [i, r] of value.results.entries()) {
     const eng = r.engines.join('+')
     lines.push(`${i + 1}. [${r.score}] ${r.title} — ${r.domain} (${eng})${r.published ? `, ${r.published}` : ''}`)
@@ -234,6 +249,9 @@ function renderFused(value) {
   const errs = Object.entries(value.engineStats ?? {}).filter(([, v]) => v.errors > 0)
   if (errs.length > 0) {
     lines.push(`engine errors: ${errs.map(([k, v]) => `${k}(${v.errors}: ${v.note ?? ''})`).join(', ')}`)
+  }
+  for (const w of value.warnings ?? []) {
+    lines.push(`WARNING: ${w}`)
   }
   return lines.join('\n')
 }
@@ -378,6 +396,7 @@ function registerDeepResearchTool(ctx, engines) {
         queries: { type: 'array', items: { type: 'string' }, description: 'Optional extra query variants for round 1.' },
         max_sources: { type: 'number', description: 'Max sources to analyze (default 8).' },
         recency: { type: 'string', enum: ['day', 'week', 'month', 'year'], description: 'Recency window for round 1.' },
+        layer: { type: 'string', enum: ['free', 'api'], description: 'Override the active layer for this call (default: current /web_change layer).' },
       },
       required: ['query'],
     },
@@ -417,12 +436,13 @@ function registerDeepResearchTool(ctx, engines) {
     timeoutMs: 120000,
     isConcurrencySafe: () => true,
     async execute(args, exec) {
+      const active = args.layer ?? getLayer()
       return researchRound({
         query: args.query,
         queries: args.queries,
         maxSources: Math.min(args.max_sources ?? 8, 12),
         recency: args.recency,
-        engines: availableEngines(engines, TIER_ENGINES.complex),
+        engines: availableEngines(engines, layerTierTable(active).complex),
         runOne: (engineName, q, n, o) => runEngine(engines, engineName, q, n, o),
         signal: exec?.signal,
       })
@@ -516,6 +536,63 @@ function renderParallel(value) {
   return lines.join('\n')
 }
 
+// ---------- /web_change command ----------
+
+// Switches the active search layer at runtime (free = keyless engines only;
+// api = full pool). Persisted to ~/.dsh-search-boost-layer.json, so the
+// choice survives reloads. Uses the host `commands` service (registered via
+// ctx.commands.register) — the same seam built-in slash commands use.
+function registerWebChangeCommand(ctx) {
+  const commands = ctx.get('commands')
+  if (!commands) {
+    console.error('[dsh-search-boost] commands service unavailable — /web_change not registered')
+    return
+  }
+  const show = () => {
+    const layer = getLayer()
+    const keys = loadKeys()
+    const names = layer === 'free'
+      ? ['antigravity', 'bing', 'ddg', 'exa-free']
+      : ['antigravity', 'bing', 'ddg', 'exa-free', 'tavily', 'brave', 'exa']
+    const actual = availableEngines(engines, names)
+    const avail = Object.entries({
+      antigravity: engines.antigravity?.available(),
+      bing: engines.bing?.available(),
+      ddg: engines.ddg?.available(),
+      'exa-free': engines['exa-free']?.available(),
+      tavily: Boolean(keys.tavily),
+      brave: Boolean(keys.brave),
+      exa: Boolean(keys.exa),
+    }).filter(([, v]) => v).map(([k]) => k)
+    return [
+      `current layer: **${layer}** — ${LAYER_LABELS[layer]}`,
+      `engines available in this layer: ${actual.join(', ') || '(none)'}`,
+      `all engines now: ${avail.join(', ') || '(none)'}`,
+      `usage: /web_change [free|api|show]`,
+    ].join('\n')
+  }
+  return commands.register({
+    name: 'web_change',
+    description: 'Switch search layer: free (keyless agy/bing/ddg/exa-free) vs api (full pool incl. keyed tavily/brave/exa). Usage: /web_change [free|api|show]',
+    input: { hint: 'free | api | show' },
+    handler: ({ rawInput }) => {
+      const cmd = rawInput.trim().toLowerCase()
+      try {
+        if (cmd === 'free' || cmd === 'api') {
+          setLayer(cmd)
+          return { kind: 'success', text: `web layer → **${cmd}** — ${LAYER_LABELS[cmd]}. Future searches use this layer.` }
+        }
+        if (cmd === 'show' || cmd === '') {
+          return { kind: 'success', text: show() }
+        }
+        return { kind: 'error', text: 'usage: /web_change [free|api|show]' }
+      } catch (err) {
+        return { kind: 'error', text: `web_change failed: ${err instanceof Error ? err.message : String(err)}` }
+      }
+    },
+  })
+}
+
 // ---------- search_stats tool ----------
 
 function registerStatsTool(ctx) {
@@ -534,6 +611,7 @@ function registerStatsTool(ctx) {
         properties: {
           startedAt: { type: 'string' }, cacheHits: { type: 'number' }, cacheMisses: { type: 'number' },
           tierCounts: { type: 'object' }, engines: { type: 'object' }, grok: { type: 'boolean' },
+          layer: { type: 'string' },
           recent: { type: 'array', items: { type: 'object', additionalProperties: true } },
         },
         required: ['startedAt'],
@@ -541,6 +619,7 @@ function registerStatsTool(ctx) {
       render: (_args, value) => [{
         type: 'text',
         text: `**dsh-search-boost stats** (since ${value.startedAt})\n` +
+          `layer: ${value.layer ?? 'api'} (switch with /web_change)\n` +
           `cache: ${value.cacheHits} hits / ${value.cacheMisses} misses\n` +
           `tiers: ${JSON.stringify(value.tierCounts)}\n` +
           `engines: ${JSON.stringify(value.engines)}\n` +
@@ -554,6 +633,7 @@ function registerStatsTool(ctx) {
       const keys = loadKeys()
       return {
         startedAt: stats.startedAt,
+        layer: getLayer(),
         cacheHits: stats.cacheHits,
         cacheMisses: stats.cacheMisses,
         tierCounts: stats.tierCounts,
@@ -561,6 +641,7 @@ function registerStatsTool(ctx) {
           antigravity: await pathExists('agy'),
           bing: true,
           ddg: true,
+          'exa-free': true,
           tavily: Boolean(keys.tavily),
           brave: Boolean(keys.brave),
           exa: Boolean(keys.exa),

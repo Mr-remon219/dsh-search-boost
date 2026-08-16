@@ -1,6 +1,6 @@
 {
   "name": "dsh-search-boost",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Multi-engine fused web search, page fetch, X (Twitter) search, deep research and parallel multi-agent research for DeepSeek Harness. Free-by-default engine chain (Antigravity CLI / Bing / DeepSeek-native) with keyed Tavily/Brave/Exa failover.",
   "type": "module",
   "main": "index.js",

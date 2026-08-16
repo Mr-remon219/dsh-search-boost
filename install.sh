@@ -97,7 +97,7 @@ echo "      pnpm: $PNPM"
 
 if command -v node >/dev/null 2>&1; then
   echo "[2/3] 校验源码语法 ..."
-  for f in index.js lib/engines.js lib/fusion.js lib/fetch.js lib/grok.js lib/policy.js; do
+  for f in index.js lib/engines.js lib/exa-free.js lib/layer.js lib/fusion.js lib/fetch.js lib/grok.js lib/policy.js; do
     node --check "$REPO/$f"
   done
   echo "      语法 OK"
