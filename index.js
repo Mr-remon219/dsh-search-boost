@@ -1021,14 +1021,13 @@ function registerWebChangeCommand(ctx, bumpEngines) {
     const layer = getLayer()
     const keys = loadKeys()
     const names = layer === 'free'
-      ? TIER_ENGINES_FREE.simple
-      : [...TIER_ENGINES_FREE.simple, 'ddg', 'antigravity', 'tavily', 'brave', 'exa']
+      ? FREE_DOMAIN_ENGINES
+      : [...FREE_DOMAIN_ENGINES, 'antigravity', 'tavily', 'brave', 'exa']
     const actual = availableEngines(engines, names)
     const avail = Object.entries({
       bing: engines.bing?.available(),
       ddg: engines.ddg?.available(),
       yahoo: engines.yahoo?.available(),
-      googlenews: engines.googlenews?.available(),
       'exa-free': engines['exa-free']?.available(),
       antigravity: engines.antigravity?.available(),
       tavily: Boolean(keys.tavily),
