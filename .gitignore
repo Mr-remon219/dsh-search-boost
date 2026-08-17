@@ -7,6 +7,7 @@ search-boost-keys.json
 .search-boost-body.json
 .search-boost-cmd.cmd
 install-prompt.txt
+scripts/engine-benchmark-report.json
 
 # 系统
 .DS_Store
