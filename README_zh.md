@@ -1,6 +1,6 @@
 # dsh-search-boost
 
-> [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）搜索增强插件 —— 多引擎融合搜索、正文抓取、X 搜索、深度研究、多 agent 并行研究、主动搜索守则。
+> [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）搜索增强插件 —— 多引擎融合搜索、正文抓取、X 搜索、深度研究、多 agent 并行研究、主动搜索守则。**v0.1.2** 重组免费层（Bing + Exa-free + Google News + Yahoo），新增 Google News，并改进 `x_search` 降级的 `site:` 域名搜索。
 
 面向 DSH 的 **bundle 插件**：升级内置 `web_search` / `web_fetch`，并注册一整套搜索工具。
 
@@ -10,8 +10,8 @@
 
 | 层 | 实际调用的引擎 | 适用场景 |
 |---|---|---|
-| **`free`**（仅无 key） | **Bing + DuckDuckGo + Yahoo + Exa MCP（exa-free）** —— 全部无 key，经 live 探针验证 | 反复研究、零成本、不想烧 API 额度 |
-| **`api`**（默认） | 上述无 key 引擎 **+** Antigravity CLI（本机有 `agy` 时） **+** 已配置 key 的 **Tavily / Brave / Exa** | 要最全召回、愿意用付费 API |
+| **`free`**（仅无 key） | **Bing + Exa-free + Google News + Yahoo** —— 全部无 key，经 live 探针验证。DuckDuckGo **不在**常规融合池里，仅用于域名限定搜索（如 `x_search` 降级的 `site:` 查询）。 | 反复研究、零成本、不想烧 API 额度 |
+| **`api`**（默认） | free 层引擎 **+** DuckDuckGo、Antigravity CLI（本机有 `agy` 时） **+** 已配置 key 的 **Tavily / Brave / Exa** | 要最全召回、愿意用付费 API |
 
 无 key 引擎**并行**运行，单个失败不会空手而归。融合排序带跨引擎共现加分和半衰期时效衰减。
 
@@ -96,7 +96,7 @@ npx --yes @deepseek-ai/dsh plugin --profile web add dsh-search-boost
 
 缺 key 的引擎自动从并行列表剔除。
 
-**`free` 层零配置**：Bing、DuckDuckGo、Yahoo、Exa MCP（exa-free）全部无 key、开箱并行。Antigravity CLI（`agy`）为可选项，仅在 **`api` 层** medium/complex 档、且本机已安装登录时加入。
+**`free` 层零配置**：`fused_search` 并行调用 Bing、Exa MCP（exa-free）、Google News、Yahoo，全部无 key。DuckDuckGo 仅在域名限定路由（`FREE_DOMAIN_ENGINES`）中使用。Antigravity CLI（`agy`）为可选项，仅在 **`api` 层** medium/complex 档、且本机已安装登录时加入。
 
 ### x_search 凭据（可选）
 
@@ -111,40 +111,42 @@ npx --yes @deepseek-ai/dsh plugin --profile web add dsh-search-boost
 
 ## 实测基准（2026-08，Windows）
 
-### 免费层引擎探针（12 条查询 × 9 个候选）
+### 免费层引擎探针（15 条查询 × 13 个候选）
 
 运行 `node scripts/engine-benchmark.mjs`；完整 JSON 见 `scripts/engine-benchmark-report.json`。
 
 | 引擎 | 成功率 | 平均延迟 | 结论 |
 |---|---|---|---|
-| bing | 100% | ~2.0s | ✅ 纳入 free 层 |
-| ddg | 100% | ~2.2s | ✅ 纳入 free 层 |
-| yahoo | 100% | ~2.3s | ✅ 纳入 free 层（v0.1.2 新增） |
-| exa-free | 100% | ~4.2s | ✅ 纳入 free 层 |
-| antigravity | 92% | ~27s | 仅 api 层（慢、依赖 `agy` CLI） |
+| bing | 100% | ~0.7s | ✅ 纳入 free 层（融合搜索） |
+| googlenews | 93% | ~0.9s | ✅ 纳入 free 层（v0.1.2 新增） |
+| exa-free | 80% | ~2.2s | ✅ 纳入 free 层 |
+| yahoo | 60% | ~1.6s | ✅ 纳入 free 层；`site:x.com` 查询表现好 |
+| ddg | 27% | ~0.3s | 仅域名搜索（`site:` 查询） |
+| antigravity | 87% | ~23s | 仅 api 层（慢、依赖 `agy` CLI） |
 | brave-html / mojeek / searx | 0% | — | 未纳入（429 / 不可达 / 被拦） |
 
 ### 集成场景
 
 | 场景 | 结果 |
 |---|---|
-| `free` 层 fused_search | ~1.3–3.0s 返回 5 条；跨引擎佐证（如 rust 发版：yahoo+exa-free 共现 → 分 3.29） |
-| `x_search`（无凭据） | keyword 多引擎+oEmbed；user guest GraphQL（@NASA ~2s）；thread oEmbed |
+| `free` 层 fused_search | ~1–3s 返回 5 条；跨引擎佐证（如 bing+googlenews 对近期新闻） |
+| `x_search`（无凭据） | 关键词走 Yahoo/DDG 的 `site:x.com` + oEmbed；用户走 guest GraphQL（@NASA ~2s）；线程走 oEmbed |
 | SSRF 与 Clash TUN fake-ip | 字面量 198.18/15 拦截；TUN 路由主机名放行（`DSH_SEARCH_ALLOW_TUN_FAKEIP=0` 可关） |
-| headless web_search | ✓ 走 free 层引擎链 |
+| headless web_search | ✓ 走 free 层 Bing / Google News / Yahoo / Exa 链 |
 | 单元 + E2E | 57/57 单元测试；14/14 黑盒 E2E |
 
 ## 架构要点
 
 - 运行在**宿主进程**（Node `fetch` / `child_process` 直调）。
-- HTML 抓取引擎（Bing / DDG / Yahoo）使用 **IPv4 强制 fetch**，避免 Windows 上 undici IPv6 优先 DNS 间歇超时。
+- HTML 抓取引擎（Bing / Yahoo / DDG）使用 **IPv4 强制 fetch**，避免 Windows 上 undici IPv6 优先 DNS 间歇超时。
+- 域名搜索（`domainSearchQuery`）对 `x.com` / `twitter.com` 过滤会自动加上 `site:` 前缀。
 - X 搜索：官方路径（`xsearch.js`）→ 免凭据链（`xfallback.js`：多引擎 + oEmbed + guest GraphQL）；无凭据时同步预检直走降级链。
 
 ## 文件
 
 ```
 index.js                    — bundle 入口
-lib/engines.js              — 引擎注册（bing / ddg / yahoo / exa-free / …）
+lib/engines.js              — 引擎注册（bing / ddg / yahoo / googlenews / exa-free / …）
 lib/exa-free.js             — Exa MCP 无 key 引擎
 lib/layer.js                — free/api 层状态
 lib/fusion.js               — 融合打分与分档

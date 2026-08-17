@@ -6,7 +6,7 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { fetchPage, makePageCache } from '../lib/fetch.js'
 import { isBlockedIp, isTunFakeIp, assertPublicHttpUrl, SsrfError } from '../lib/ssrf.js'
-import { normalizeUrl, fusedSearch, TIER_ENGINES, TIER_ENGINES_FREE, tierEnginesFor, SECONDARY_VARIANTS, searchCacheKey, estimateComplexity } from '../lib/fusion.js'
+import { normalizeUrl, fusedSearch, TIER_ENGINES, TIER_ENGINES_FREE, tierEnginesFor, SECONDARY_VARIANTS, searchCacheKey, estimateComplexity, domainSearchQuery } from '../lib/fusion.js'
 import { researchRound, parallelResearch, setTimer } from '../lib/research.js'
 import { getLayer, setLayer } from '../lib/layer.js'
 import { parseExaFreeText } from '../lib/exa-free.js'
@@ -176,7 +176,7 @@ describe('P1-6 cache key includes tier', () => {
 
 describe('P1-8 / P1-9 / P1-11 / P1-13 wiring', () => {
   it('drops agy from simple and shares cache + signal + ddg stats', () => {
-    assert.deepEqual(TIER_ENGINES.simple, ['bing', 'ddg', 'yahoo', 'exa-free'])
+    assert.deepEqual(TIER_ENGINES.simple, ['bing', 'ddg', 'yahoo', 'exa-free', 'googlenews'])
     assert.ok(TIER_ENGINES.medium.includes('antigravity'))
     assert.ok(TIER_ENGINES.simple.includes('exa-free'))
     const provider = indexSrc.slice(indexSrc.indexOf('function registerSearchProvider'), indexSrc.indexOf('// ---------- fused_search tool'))
@@ -213,11 +213,17 @@ describe('v0.0.2 web layer', () => {
         assert.equal(keyed.includes(e), false, `free tier ${tier} must not contain keyed engine ${e}`)
       }
     }
-    assert.deepEqual(TIER_ENGINES_FREE.simple, ['bing', 'ddg', 'yahoo', 'exa-free'])
+    assert.deepEqual(TIER_ENGINES_FREE.simple, ['bing', 'exa-free', 'googlenews', 'yahoo'])
     assert.ok(tierEnginesFor('free', 'complex').every((e) => !keyed.includes(e)))
     assert.ok(tierEnginesFor('free', 'complex').includes('yahoo'))
+    assert.ok(tierEnginesFor('free', 'complex').includes('googlenews'))
     assert.ok(tierEnginesFor('api', 'complex').includes('tavily'))
     assert.ok(tierEnginesFor('free', 'complex').includes('exa-free'))
+  })
+
+  it('domainSearchQuery prepends site: for x.com filters', () => {
+    assert.equal(domainSearchQuery('nodejs', ['x.com', 'twitter.com']), 'site:x.com nodejs')
+    assert.equal(domainSearchQuery('site:x.com foo', ['x.com']), 'site:x.com foo')
   })
 
   it('round-trips layer state, restoring the original default afterwards', () => {

@@ -1,6 +1,6 @@
 # dsh-search-boost
 
-> Search boost for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH): multi-engine fused search, focused page fetching, X (Twitter) search, step-mode deep research, parallel multi-agent research, and an injected proactive-search policy.
+> Search boost for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH): multi-engine fused search, focused page fetching, X (Twitter) search, step-mode deep research, parallel multi-agent research, and an injected proactive-search policy. **v0.1.2** rebuilds the free layer (Bing + Exa-free + Google News + Yahoo) and adds Google News plus smarter `site:` domain search for `x_search` fallback.
 
 A **bundle plugin** for DSH that upgrades the built-in `web_search` / `web_fetch` and registers a family of search tools.
 
@@ -10,8 +10,8 @@ Two layers, switched at runtime with `/web_change` (persisted to `~/.dsh-search-
 
 | Layer | Engines dialed | When to use |
 |---|---|---|
-| **`free`** (keyless only) | **Bing + DuckDuckGo + Yahoo + Exa MCP (exa-free)** — all live-probed, no API keys | Research loops, zero-cost runs, privacy-conscious use |
-| **`api`** (default) | Same keyless legs **plus** Antigravity CLI (when `agy` is on PATH) and keyed **Tavily / Brave / Exa** (when keys are present) | Maximum recall; cross-engine corroboration with paid APIs |
+| **`free`** (keyless only) | **Bing + Exa-free + Google News + Yahoo** — live-probed, no API keys. DuckDuckGo is **not** in the general fused pool; it is used only for domain-restricted search (e.g. `x_search` fallback with `site:`). | Zero-cost runs, repeated research, privacy-conscious use |
+| **`api`** (default) | Free-layer engines **plus** DuckDuckGo, Antigravity CLI (when `agy` is on PATH), and keyed **Tavily / Brave / Exa** (when keys are present) | Maximum recall; cross-engine corroboration with paid APIs |
 
 Keyless engines run **in parallel** so one failure never leaves you empty-handed. Fused ranking adds cross-engine co-occurrence scoring and half-life time-decay freshness.
 
@@ -94,7 +94,7 @@ The published bundle contains **no secrets**. Keys load from:
 
 Engines without a key are dropped from the fan-out automatically.
 
-**Free layer needs zero configuration.** Bing, DuckDuckGo, Yahoo, and Exa MCP (exa-free) are keyless and run in parallel. Antigravity CLI (`agy`) is optional and only joins in the **`api`** layer (medium/complex tiers) when installed and signed in.
+**Free layer needs zero configuration.** Bing, Exa MCP (exa-free), Google News, and Yahoo are keyless and run in parallel for `fused_search`. DuckDuckGo joins only for domain-restricted routes (`FREE_DOMAIN_ENGINES`). Antigravity CLI (`agy`) is optional and only joins in the **`api`** layer (medium/complex tiers) when installed and signed in.
 
 ### x_search credentials (optional)
 
@@ -109,40 +109,42 @@ Engines without a key are dropped from the fan-out automatically.
 
 ## Verified benchmarks (2026-08, Windows)
 
-### Free-layer engine probe (12 queries × 9 candidates)
+### Free-layer engine probe (15 queries × 13 candidates)
 
 Live benchmark (`node scripts/engine-benchmark.mjs`); full report in `scripts/engine-benchmark-report.json`.
 
 | Engine | Success | Avg latency | Verdict |
 |---|---|---|---|
-| bing | 100% | ~2.0s | ✅ free layer |
-| ddg | 100% | ~2.2s | ✅ free layer |
-| yahoo | 100% | ~2.3s | ✅ free layer (new in v0.1.2) |
-| exa-free | 100% | ~4.2s | ✅ free layer |
-| antigravity | 92% | ~27s | api layer only (slow, needs `agy` CLI) |
+| bing | 100% | ~0.7s | ✅ free layer (fused) |
+| googlenews | 93% | ~0.9s | ✅ free layer (new in v0.1.2) |
+| exa-free | 80% | ~2.2s | ✅ free layer |
+| yahoo | 60% | ~1.6s | ✅ free layer; strong on `site:x.com` queries |
+| ddg | 27% | ~0.3s | domain search only (`site:` queries) |
+| antigravity | 87% | ~23s | api layer only (slow, needs `agy` CLI) |
 | brave-html / mojeek / searx | 0% | — | rejected (429, blocked, or unreachable) |
 
 ### Integration scenarios
 
 | Scenario | Result |
 |---|---|
-| `free` layer fused_search | 5 hits in ~1.3–3.0s; cross-engine corroboration (e.g. yahoo+exa-free → score 3.29 on rust release notes) |
-| `x_search` (no credentials) | keyword via multi-engine + oEmbed; user via guest GraphQL (@NASA ~2s); thread via oEmbed |
+| `free` layer fused_search | 5 hits in ~1–3s; cross-engine corroboration (e.g. bing+googlenews on recent news) |
+| `x_search` (no credentials) | keyword via Yahoo/DDG `site:x.com` + oEmbed; user via guest GraphQL (@NASA ~2s); thread via oEmbed |
 | SSRF vs Clash TUN fake-ip | Literal 198.18/15 blocked; TUN-routed hostnames allowed (`DSH_SEARCH_ALLOW_TUN_FAKEIP=0` to disable) |
-| Headless `web_search` | ✓ free Bing/DDG/Yahoo/Exa chain |
+| Headless `web_search` | ✓ free Bing / Google News / Yahoo / Exa chain |
 | Unit + E2E tests | 57/57 unit tests; 14/14 black-box E2E |
 
 ## Architecture notes
 
 - Runs in the **host process** (Node `fetch` / `child_process` directly).
-- HTML scrapers (Bing / DDG / Yahoo) use **IPv4-forced fetch** — undici on Windows defaults to IPv6-first DNS, which intermittently times out against search hosts.
+- HTML scrapers (Bing / Yahoo / DDG) use **IPv4-forced fetch** — undici on Windows defaults to IPv6-first DNS, which intermittently times out against search hosts.
+- Domain search (`domainSearchQuery`) auto-prepends `site:` for `x.com` / `twitter.com` filters.
 - X search: official path (`lib/xsearch.js`) → credential-free chain (`lib/xfallback.js`: multi-engine + oEmbed + guest GraphQL) with sync preflight when no credentials.
 
 ## Files
 
 ```
 index.js                    — bundle entry (providers + tools + commands + policy)
-lib/engines.js              — engine registry (bing / ddg / yahoo / exa-free / …)
+lib/engines.js              — engine registry (bing / ddg / yahoo / googlenews / exa-free / …)
 lib/exa-free.js             — Exa MCP keyless engine
 lib/layer.js                — free/api layer state (/web_change)
 lib/fusion.js               — fusion scoring, tier tables, cache
