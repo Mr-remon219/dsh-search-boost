@@ -31,7 +31,7 @@ A **bundle plugin** for DSH that upgrades the built-in `web_search` and register
 
 ```sh
 dsh plugin --profile web add dsh-search-boost          # latest
-dsh plugin --profile web add dsh-search-boost@0.1.0    # pin a version
+dsh plugin --profile web add dsh-search-boost@0.1.1    # pin a version
 dsh plugin --profile web update dsh-search-boost       # update to a newer release
 ```
 
