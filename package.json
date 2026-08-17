@@ -1,7 +1,7 @@
 {
   "name": "dsh-search-boost",
-  "version": "0.1.1",
-  "description": "Multi-engine fused web search, page fetch, real-time X (Twitter) search with credential-free fallback, deep research and parallel multi-agent research for DeepSeek Harness. Free-by-default engine chain (Antigravity CLI / Bing / DuckDuckGo / Exa MCP) with keyed Tavily/Brave/Exa failover.",
+  "version": "0.1.2",
+  "description": "Multi-engine fused web search, page fetch, real-time X (Twitter) search with credential-free fallback, deep research and parallel multi-agent research for DeepSeek Harness. Free layer: Bing / DuckDuckGo / Yahoo / Exa MCP (all keyless, live-probed); api layer adds Antigravity CLI and keyed Tavily/Brave/Exa.",
   "type": "module",
   "main": "index.js",
   "scripts": {

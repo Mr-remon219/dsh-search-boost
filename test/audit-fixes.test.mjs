@@ -176,7 +176,7 @@ describe('P1-6 cache key includes tier', () => {
 
 describe('P1-8 / P1-9 / P1-11 / P1-13 wiring', () => {
   it('drops agy from simple and shares cache + signal + ddg stats', () => {
-    assert.deepEqual(TIER_ENGINES.simple, ['bing', 'ddg', 'exa-free'])
+    assert.deepEqual(TIER_ENGINES.simple, ['bing', 'ddg', 'yahoo', 'exa-free'])
     assert.ok(TIER_ENGINES.medium.includes('antigravity'))
     assert.ok(TIER_ENGINES.simple.includes('exa-free'))
     const provider = indexSrc.slice(indexSrc.indexOf('function registerSearchProvider'), indexSrc.indexOf('// ---------- fused_search tool'))
@@ -213,8 +213,9 @@ describe('v0.0.2 web layer', () => {
         assert.equal(keyed.includes(e), false, `free tier ${tier} must not contain keyed engine ${e}`)
       }
     }
-    assert.deepEqual(TIER_ENGINES_FREE.simple, ['bing', 'ddg', 'exa-free'])
+    assert.deepEqual(TIER_ENGINES_FREE.simple, ['bing', 'ddg', 'yahoo', 'exa-free'])
     assert.ok(tierEnginesFor('free', 'complex').every((e) => !keyed.includes(e)))
+    assert.ok(tierEnginesFor('free', 'complex').includes('yahoo'))
     assert.ok(tierEnginesFor('api', 'complex').includes('tavily'))
     assert.ok(tierEnginesFor('free', 'complex').includes('exa-free'))
   })
@@ -271,7 +272,7 @@ describe('v0.0.2 free-layer engine guard', () => {
     })
     // free layer must substitute the keyless tier pool, never the keyed ones
     assert.ok(invoked.every((e) => !['tavily', 'brave', 'exa'].includes(e)), `invoked keyed engines: ${invoked}`)
-    assert.ok(['bing', 'ddg', 'exa-free'].some((e) => invoked.includes(e)), `expected free legs, got ${invoked}`)
+    assert.ok(['bing', 'ddg', 'yahoo', 'exa-free'].some((e) => invoked.includes(e)), `expected free legs, got ${invoked}`)
     assert.ok(result.warnings.length === 0)
   })
 

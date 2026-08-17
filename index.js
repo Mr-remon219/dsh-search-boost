@@ -14,7 +14,7 @@
 // child_process directly — no sandbox shell indirection needed.
 
 import { loadKeys, engineRegistry, ENGINE_ORDER } from './lib/engines.js'
-import { fusedSearch, makeCache, estimateComplexity, TIER_ENGINES, TIER_ENGINES_FREE, searchCacheKey, hostOf, normalizeUrl } from './lib/fusion.js'
+import { fusedSearch, makeCache, estimateComplexity, TIER_ENGINES, TIER_ENGINES_FREE, FREE_DOMAIN_ENGINES, domainSearchQuery, searchCacheKey, hostOf, normalizeUrl } from './lib/fusion.js'
 import { fetchPage, makePageCache } from './lib/fetch.js'
 import { isSsrfError } from './lib/ssrf.js'
 import { runXTool, xAuthAvailableSync } from './lib/xsearch.js'
@@ -159,13 +159,15 @@ async function runFused(engines, { query, queries, engineList, maxResults, inclu
 async function domainSearch(engines, { query, maxResults = 5, includeDomains = ['x.com', 'twitter.com'], signal }) {
   const active = getLayer()
   const keyed = active === 'free' ? [] : ['tavily', 'brave', 'exa']
-  const names = availableEngines(engines, ['bing', 'ddg', 'exa-free', ...keyed])
+  const pool = active === 'free' ? FREE_DOMAIN_ENGINES : [...FREE_DOMAIN_ENGINES, ...keyed]
+  const names = availableEngines(engines, pool)
+  const q = domainSearchQuery(query, includeDomains)
   const n = Math.min(Math.max(maxResults ?? 5, 1), 8)
   const per = Math.max(4, Math.ceil(n * 0.8))
   const opts = { includeDomains, signal }
   const tasks = names.map(async (name) => {
     try {
-      return await runEngine(engines, name, query, per, opts)
+      return await runEngine(engines, name, q, per, opts)
     } catch {
       return []
     }
@@ -1019,14 +1021,15 @@ function registerWebChangeCommand(ctx, bumpEngines) {
     const layer = getLayer()
     const keys = loadKeys()
     const names = layer === 'free'
-      ? ['antigravity', 'bing', 'ddg', 'exa-free']
-      : ['antigravity', 'bing', 'ddg', 'exa-free', 'tavily', 'brave', 'exa']
+      ? FREE_DOMAIN_ENGINES
+      : [...FREE_DOMAIN_ENGINES, 'antigravity', 'tavily', 'brave', 'exa']
     const actual = availableEngines(engines, names)
     const avail = Object.entries({
-      antigravity: engines.antigravity?.available(),
       bing: engines.bing?.available(),
       ddg: engines.ddg?.available(),
+      yahoo: engines.yahoo?.available(),
       'exa-free': engines['exa-free']?.available(),
+      antigravity: engines.antigravity?.available(),
       tavily: Boolean(keys.tavily),
       brave: Boolean(keys.brave),
       exa: Boolean(keys.exa),
@@ -1040,7 +1043,7 @@ function registerWebChangeCommand(ctx, bumpEngines) {
   }
   return commands.register({
     name: 'web_change',
-    description: 'Switch search layer: free (keyless agy/bing/ddg/exa-free) vs api (full pool incl. keyed tavily/brave/exa). Usage: /web_change [free|api|show]',
+    description: 'Switch search layer: free (keyless bing/ddg/yahoo/exa-free) vs api (full pool incl. agy + keyed tavily/brave/exa). Usage: /web_change [free|api|show]',
     input: { hint: 'free | api | show' },
     handler: ({ rawInput }) => {
       const cmd = rawInput.trim().toLowerCase()
@@ -1127,10 +1130,11 @@ function registerStatsTool(ctx, bumpEngines) {
         cacheMisses: stats.cacheMisses,
         tierCounts: stats.tierCounts,
         engines: {
-          antigravity: engines.antigravity?.available() ?? false,
           bing: engines.bing?.available() ?? false,
           ddg: engines.ddg?.available() ?? false,
+          yahoo: engines.yahoo?.available() ?? false,
           'exa-free': engines['exa-free']?.available() ?? false,
+          antigravity: engines.antigravity?.available() ?? false,
           tavily: engines.tavily?.available() ?? false,
           brave: engines.brave?.available() ?? false,
           exa: engines.exa?.available() ?? false,
