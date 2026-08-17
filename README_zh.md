@@ -23,69 +23,91 @@
 | `search_stats` | 缓存 / 分档 / 引擎可用性 / x_search 凭据状态审计 |
 | 搜索守则 | `systemPrompt.section` 正规注入：时效事实必搜、技术论断验证、X 内容路由 `x_search`、停止条件、成本感知（免费引擎优先） |
 
-## 安装（bundle，推荐）
+## 安装（推荐 bundle 方式）
 
-**从 npm 安装（推荐给使用者 —— 已发布版本）：**
-
-```sh
-dsh plugin --profile web add dsh-search-boost          # 最新版
-dsh plugin --profile web add dsh-search-boost@0.1.1    # 锁定版本
-dsh plugin --profile web update dsh-search-boost       # 升级到更新版本
-```
-
-`--profile <name>` 是**必填**（dsh 的 plugin 命令一次管理一个 profile；`web` 是标准 web-UI profile）。命令会转发给 pnpm，然后**自动把包加进 profile 的 `dsh.profile.bundles` 层列表** —— dsh 检测到包的 `dsh.bundle.patch` 声明后自动接好 patch 层，无需手动改配置。重启 `dsh --profile web` 即生效。
-
-npm 安装按版本分发、不依赖任何本地 checkout；registry 上的包永远对应一个已提交、已测试的工作树（由 `prepublishOnly` 门禁保证）。
-
-**从源码安装（开发 / 最新 git）：**
+### 从 npm 安装（普通用户推荐）
 
 ```sh
-dsh plugin --profile web add github:Mr-remon219/dsh-search-boost        # 最新 main
-dsh plugin --profile web add github:Mr-remon219/dsh-search-boost#<hash> # 锁定 commit
-dsh plugin --profile web add git+file:///path/to/repo                   # 本地 git 源（协议已实测）
+dsh plugin --profile web add dsh-search-boost          # 安装最新版
+dsh plugin --profile web add dsh-search-boost@0.1.1    # 安装指定版本
+dsh plugin --profile web update dsh-search-boost       # 更新到新版
 ```
 
-git/本地源适合开发迭代：改完 → 重启 → 验证。
+**说明：**
 
-或者直接运行仓库内的安装脚本（语法校验 → key 配置 → 安装 → 验证）：
+- `--profile web` 里的 `web` 是 DSH 常用的 Web 界面配置档，**必须填写** `--profile`。
+- 安装时 DSH 会通过 pnpm 拉包，并自动写入当前 profile 的 bundle 列表；检测到本插件的 patch 配置后会自动生效，**不用手改配置文件**。
+- 装好后**重启** DSH 即可：
+
+  ```sh
+  dsh --profile web
+  ```
+
+- 从 npm 安装的是**正式发布版**，与 GitHub 上已测试、已提交的代码一致（发布前会自动跑测试）。
+
+### 从 Git 源码安装（开发 / 追最新 main）
+
+```sh
+dsh plugin --profile web add github:Mr-remon219/dsh-search-boost           # 跟踪 main 最新
+dsh plugin --profile web add github:Mr-remon219/dsh-search-boost#<commit>  # 锁定某个 commit
+dsh plugin --profile web add git+file:///你的/本地/仓库路径                 # 本地仓库
+```
+
+适合改代码、验 bug：改完 → 重启 DSH → 再测。
+
+### 一键安装脚本
+
+仓库里提供了安装脚本，会依次做语法检查、密钥配置提示、安装和验证：
 
 ```powershell
-.\install.ps1          # Windows（默认装进 profile "web"）
+.\install.ps1          # Windows（默认 profile 为 web）
 ./install.sh           # Linux / macOS
 ```
 
-装完重启 `dsh --profile web` 即用：内置 `web_search` 走本插件引擎链，`fused_search` / `fetch_page` / `x_search` / `deep_research` / `research_parallel` / `search_stats` 全部注册。git 源安装协议已实测通过（pnpm 拉取 → patch 层生效 → 端到端可用）。
+安装完成后重启 `dsh --profile web`，内置 `web_search` 会走本插件的引擎链，同时注册 `fused_search`、`fetch_page`、`x_search`、`deep_research`、`research_parallel`、`search_stats` 等工具。
 
-### 排查：缺 `dsh` 或缺 `pnpm`
+### 常见问题：找不到 `dsh` 或 `pnpm`
 
-DSH 官方推荐 `npx @deepseek-ai/dsh web` 运行，**不会产生全局 `dsh` 命令**，安装脚本因此检测不到。脚本现在会自动探测 npx 缓存（`%LOCALAPPDATA%\npm-cache\_npx\*` / `~/.npm/_npx/*`）和 npm 全局前缀，通常开箱即过。若仍失败，任选其一：
+官方常用启动方式是：
 
-1. 全局安装（推荐），装完重开终端：
+```sh
+npx @deepseek-ai/dsh web
+```
+
+这样**不会**在系统里装全局 `dsh` 命令，安装脚本可能因此报「找不到 dsh」。脚本会尝试在 npx 缓存和 npm 全局目录里自动查找；若仍失败，可以：
+
+1. **全局安装 DSH**（推荐），装完**重新打开终端**：
+
    ```sh
    npm install -g @deepseek-ai/dsh
    ```
-2. 跳过脚本，直接用 npx 执行安装：
+
+2. **不用脚本**，直接用 npx 安装本插件：
+
    ```sh
-   npx --yes @deepseek-ai/dsh plugin --profile web add <本仓库路径>
+   npx --yes @deepseek-ai/dsh plugin --profile web add dsh-search-boost
+   # 本地仓库则把最后一项换成仓库路径
    ```
 
-`dsh plugin` 还需要 **pnpm**（dsh 用它解析 bundle 依赖）。脚本会检查 pnpm，若已装但不在 PATH（例如装完没重开终端），会自动把 npm 全局目录注入当前会话的 PATH；若确实没装：
+`dsh plugin` 还需要 **pnpm**（DSH 用它解析 bundle 依赖）。若已安装 pnpm 但终端找不到，多半是 PATH 没刷新——**重开终端**，或执行：
 
 ```sh
 npm install -g pnpm
-# 或用 corepack：
+# 也可用 corepack：
 corepack enable && corepack prepare pnpm@latest --activate
 ```
 
+### 验证是否安装成功
+
 ```sh
-dsh --profile web --dump-config   # web.searchProvider 应为 dsh-search-boost
-dsh --profile web                 # 启动后内置 web_search 即走本插件引擎链
+dsh --profile web --dump-config   # 看 web.searchProvider 是否为 dsh-search-boost
+dsh --profile web                 # 启动后，内置 web_search 即走本插件
 ```
 
-**无头端到端验证**（不启动 GUI）：在 profile 的 `cordis.patch.yml` 追加 headless-runner 插件行（`inject: [headlessStartup]` + `config.task: !!js ctx.headlessStartup.task`，见内置 `@deepseek-ai/dsh-headless` 的 patch），然后：
+**无界面快速验证**（不打开 GUI）：在 profile 的 `cordis.patch.yml` 里加上 headless-runner 插件（`inject: [headlessStartup]`，`config.task: !!js ctx.headlessStartup.task`，可参考内置 `@deepseek-ai/dsh-headless`），然后：
 
 ```sh
-dsh --profile <name> "用 web_search 搜索 …"
+dsh --profile web "用 web_search 搜索 …"
 ```
 
 ## 备选：会话级动态插件（plugin-host.js）
