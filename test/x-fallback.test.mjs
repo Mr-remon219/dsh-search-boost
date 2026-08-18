@@ -11,6 +11,30 @@ import { SEARCH_POLICY_SECTION } from '../lib/policy.js'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const indexSrc = readFileSync(join(root, 'index.js'), 'utf8')
 
+describe('salvageJson array spans', () => {
+  it('salvages a top-level JSON array when prose prefixes the payload', () => {
+    const raw = 'Here are the posts:\n[{"id":"1","text":"first"},{"id":"2","text":"second"}]'
+    const parsed = salvageJson(raw)
+    assert.ok(Array.isArray(parsed))
+    assert.equal(parsed.length, 2)
+    assert.equal(parsed[0].id, '1')
+    assert.equal(parsed[1].text, 'second')
+  })
+
+  it('prefers the full array over lone object spans in prefixed prose', () => {
+    const raw = 'Results follow:\n[{"id":"a","text":"one"},{"id":"b","text":"two"}]\nDone.'
+    const parsed = salvageJson(raw)
+    assert.ok(Array.isArray(parsed))
+    assert.equal(parsed.length, 2)
+  })
+
+  it('still salvages a lone top-level object', () => {
+    const raw = 'User profile:\n{"id":"9","username":"nasa","bio":"space"}'
+    const parsed = salvageJson(raw)
+    assert.equal(parsed.username, 'nasa')
+  })
+})
+
 describe('v0.0.3 x_search title/entity parsing', () => {
   it('splitXTitle: "Author on X: text" → author + text', () => {
     assert.deepEqual(splitXTitle('OpenAI on X: "GPT-5.6 is available starting today"'), {
