@@ -125,6 +125,29 @@ describe('P0-3 / P1-7 URL identity', () => {
 })
 
 describe('P1-4 fetch_page cache key', () => {
+  it('encodes target URL query strings for the Jina reader path', async () => {
+    const hits = []
+    const orig = globalThis.fetch
+    globalThis.fetch = async (url) => {
+      hits.push(String(url))
+      if (String(url).startsWith('https://r.jina.ai/')) {
+        return new Response('# Title\n\nquery string page body with enough padding to skip local fallback\n\n', { status: 200 })
+      }
+      return orig(url)
+    }
+    try {
+      const cache = makePageCache()
+      await fetchPage('https://example.com/doc?foo=1&bar=2', null, cache)
+      const jinaUrl = hits.find((u) => u.startsWith('https://r.jina.ai/'))
+      assert.ok(jinaUrl, 'expected a Jina fetch')
+      assert.match(jinaUrl, /foo%3D1/)
+      assert.match(jinaUrl, /bar%3D2/)
+      assert.doesNotMatch(jinaUrl, /r\.jina\.ai\/https:\/\/example\.com\/doc\?foo=1&bar=2/)
+    } finally {
+      globalThis.fetch = orig
+    }
+  })
+
   it('reuses raw cache across focus values', async () => {
     const hits = []
     const orig = globalThis.fetch
