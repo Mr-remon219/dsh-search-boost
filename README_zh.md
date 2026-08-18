@@ -181,4 +181,8 @@ npm publish   # prepublishOnly：语法 + 测试 + 工作树干净
 
 MIT
 
-**相关链接：** [Issues](https://github.com/Mr-remon219/dsh-search-boost/issues) · [search-boost](https://github.com/Mr-remon219/search-boost) · [pi-search-boost](https://github.com/Mr-remon219/pi-search-boost) · [Linux.do](https://linux.do/)
+---
+
+**相关链接：** [Issues](https://github.com/Mr-remon219/dsh-search-boost/issues) · [search-boost](https://github.com/Mr-remon219/search-boost) · [pi-search-boost](https://github.com/Mr-remon219/pi-search-boost)
+
+**友情链接：** [LINUX DO 社区](https://linux.do/)
