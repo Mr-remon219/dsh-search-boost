@@ -49,6 +49,24 @@ describe('v0.0.3 x_search title/entity parsing', () => {
   })
 })
 
+describe('x_search grok-build JSON parsing', () => {
+  it('salvageJson recovers a prefixed JSON array', () => {
+    const posts = [
+      { id: '1', text: 'a', url: 'https://x.com/1' },
+      { id: '2', text: 'b', url: 'https://x.com/2' },
+    ]
+    const prefixed = `Results:\n${JSON.stringify(posts)}`
+    assert.equal(normalizePosts(salvageJson(prefixed)).length, 2)
+  })
+
+  it('readGrokClientInfo reads version from ~/.grok/models_cache.json when present', async () => {
+    const { readGrokClientInfo } = await import('../lib/xsearch.js')
+    const info = readGrokClientInfo()
+    assert.match(info.version, /^\d+\.\d+\.\d+$/)
+    assert.ok(info.defaultModel.startsWith('grok-'))
+  })
+})
+
 describe('v0.0.3 guest GraphQL parsing (new shape)', () => {
   it('decodeUserId handles the base64 "User:123" id', () => {
     assert.equal(decodeUserId(Buffer.from('User:11348282').toString('base64')), '11348282')
@@ -377,6 +395,103 @@ describe('v0.0.4 wiring regression', () => {
       assert.equal(second.cacheHit, true)
       assert.ok(calls <= callsAfterFirst, 'cache hit must not re-fetch')
       assert.deepEqual(second.items, first.items)
+    } finally {
+      globalThis.fetch = origFetch
+    }
+  })
+
+  it('x_search cache invalidates on /web_change layer switch', async () => {
+    const { apply } = await import('../index.js')
+    const tools = new Map()
+    const commands = new Map()
+    const commandsService = { register: (c) => { commands.set(c.name, c); return c } }
+    const ctx = {
+      get: (s) => ({ commands: commandsService, subagents: null }[s]),
+      web: { registerSearchProvider: () => {}, registerFetchProvider: () => {} },
+      tools: { register: (t) => tools.set(t.name, t) },
+      systemPrompt: { section: () => {} },
+      timeout: (ms) => ms,
+    }
+    apply(ctx, {})
+    const xTool = tools.get('x_search')
+    const webChange = commands.get('web_change')
+    const origFetch = globalThis.fetch
+    let calls = 0
+    globalThis.fetch = async (url) => {
+      calls++
+      const u = String(url)
+      if (u.startsWith('https://www.bing.com/')) {
+        return new Response(
+          '<li class="b_algo"><h2><a href="https://x.com/OpenAI/status/222">OpenAI on X: &quot;layer cache probe&quot;</a></h2><p>probe</p></li>',
+          { status: 200 },
+        )
+      }
+      if (u.startsWith('https://publish.x.com/oembed')) {
+        return new Response(
+          JSON.stringify({ author_name: 'OpenAI', author_url: 'https://x.com/OpenAI', html: '<blockquote>layer cache probe full body text here</blockquote>' }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      throw new Error('unexpected fetch: ' + u)
+    }
+    try {
+      const args = { type: 'keyword', query: 'layer cache probe', max_results: 1 }
+      const first = await xTool.execute(args, { signal: undefined })
+      assert.ok(first.results >= 1)
+      const callsAfterFirst = calls
+      const second = await xTool.execute(args, { signal: undefined })
+      assert.equal(second.cacheHit, true)
+      webChange.handler({ rawInput: 'api' })
+      const third = await xTool.execute(args, { signal: undefined })
+      assert.notEqual(third.cacheHit, true)
+      assert.ok(calls > callsAfterFirst, 'layer change must bust x_search cache')
+    } finally {
+      globalThis.fetch = origFetch
+    }
+  })
+
+  it('x_search cache invalidates on /x-logout', async () => {
+    const { apply } = await import('../index.js')
+    const tools = new Map()
+    const commands = new Map()
+    const commandsService = { register: (c) => { commands.set(c.name, c); return c } }
+    const ctx = {
+      get: (s) => ({ commands: commandsService, subagents: null }[s]),
+      web: { registerSearchProvider: () => {}, registerFetchProvider: () => {} },
+      tools: { register: (t) => tools.set(t.name, t) },
+      systemPrompt: { section: () => {} },
+      timeout: (ms) => ms,
+    }
+    apply(ctx, {})
+    const xTool = tools.get('x_search')
+    const logout = commands.get('x-logout')
+    const origFetch = globalThis.fetch
+    let calls = 0
+    globalThis.fetch = async (url) => {
+      calls++
+      const u = String(url)
+      if (u.startsWith('https://www.bing.com/')) {
+        return new Response(
+          '<li class="b_algo"><h2><a href="https://x.com/OpenAI/status/333">OpenAI on X: &quot;logout cache probe&quot;</a></h2><p>probe</p></li>',
+          { status: 200 },
+        )
+      }
+      if (u.startsWith('https://publish.x.com/oembed')) {
+        return new Response(
+          JSON.stringify({ author_name: 'OpenAI', author_url: 'https://x.com/OpenAI', html: '<blockquote>logout cache probe full body</blockquote>' }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      throw new Error('unexpected fetch: ' + u)
+    }
+    try {
+      const args = { type: 'keyword', query: 'logout cache probe', max_results: 1 }
+      await xTool.execute(args, { signal: undefined })
+      const callsAfterFirst = calls
+      await xTool.execute(args, { signal: undefined })
+      logout.handler({})
+      await xTool.execute(args, { signal: undefined })
+      assert.ok(calls > callsAfterFirst, '/x-logout must bust x_search cache')
     } finally {
       globalThis.fetch = origFetch
     }
