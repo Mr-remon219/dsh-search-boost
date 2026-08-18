@@ -4,6 +4,20 @@
 
 A **bundle plugin** for DSH that upgrades the built-in `web_search` / `web_fetch` and registers a family of search tools.
 
+> **search-boost family**
+>
+> | Project | For | Link |
+> |---------|-----|------|
+> | [**search-boost**](https://github.com/Mr-remon219/search-boost) | Cursor · Codex · Claude · Grok · Antigravity via MCP | [GitHub](https://github.com/Mr-remon219/search-boost) · [npm](https://www.npmjs.com/package/search-boost-mcp) |
+> | [**dsh-search-boost**](https://github.com/Mr-remon219/dsh-search-boost) *(this repo)* | [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) bundle plugin | you are here |
+> | [**pi-search-boost**](https://github.com/Mr-remon219/pi-search-boost) | [pi](https://github.com/earendil-works/pi-coding-agent) extension | [GitHub](https://github.com/Mr-remon219/pi-search-boost) · [npm](https://www.npmjs.com/package/pi-search-boost) |
+
+Search engines live in **`lib/`**: on the **free** layer, Bing, DuckDuckGo, Yahoo, and Exa-free run in parallel; the **api** layer adds Antigravity CLI (when available) and keyed Tavily / Brave / Exa when keys are present (one key is enough; all three recommended for best fusion).
+
+中文文档 → [README_zh.md](./README_zh.md)
+
+---
+
 ## Search layers
 
 Two layers, switched at runtime with `/web_change` (persisted to `~/.dsh-search-boost-layer.json`):
@@ -165,6 +179,4 @@ npm publish   # prepublishOnly: syntax + tests + clean git tree
 
 MIT
 
-## Friends
-
-- [Linux.do](https://linux.do/) — open-source developer community
+**Links:** [Issues](https://github.com/Mr-remon219/dsh-search-boost/issues) · [search-boost](https://github.com/Mr-remon219/search-boost) · [pi-search-boost](https://github.com/Mr-remon219/pi-search-boost) · [Linux.do](https://linux.do/)

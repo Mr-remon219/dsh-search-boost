@@ -4,6 +4,20 @@
 
 面向 DSH 的 **bundle 插件**：升级内置 `web_search` / `web_fetch`，并注册一整套搜索工具。
 
+> **search-boost 系列**
+>
+> | 项目 | 用在哪 | 链接 |
+> |------|--------|------|
+> | [**search-boost**](https://github.com/Mr-remon219/search-boost) | Cursor · Codex · Claude · Grok · Antigravity | [GitHub](https://github.com/Mr-remon219/search-boost) · [npm](https://www.npmjs.com/package/search-boost-mcp) |
+> | [**dsh-search-boost**](https://github.com/Mr-remon219/dsh-search-boost)（本仓库） | [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) | 当前仓库 |
+> | [**pi-search-boost**](https://github.com/Mr-remon219/pi-search-boost) | [pi](https://github.com/earendil-works/pi-coding-agent) | [GitHub](https://github.com/Mr-remon219/pi-search-boost) · [npm](https://www.npmjs.com/package/pi-search-boost) |
+
+底层搜索引擎在 **`lib/`**：**free** 层并行 Bing、DuckDuckGo、Yahoo 与 Exa-free；**api** 层增加 Antigravity CLI（本机可用时）以及已配置 key 的 Tavily / Brave / Exa（配一个即可；建议配齐三个以获得最佳融合）。
+
+English → [README.md](./README.md)
+
+---
+
 ## 搜索层（`/web_change` 切换）
 
 运行时用 `/web_change` 切换，选择写入 `~/.dsh-search-boost-layer.json`，重启后仍生效：
@@ -167,6 +181,4 @@ npm publish   # prepublishOnly：语法 + 测试 + 工作树干净
 
 MIT
 
-## 友链
-
-- [Linux.do](https://linux.do/) — 开源技术社区
+**相关链接：** [Issues](https://github.com/Mr-remon219/dsh-search-boost/issues) · [search-boost](https://github.com/Mr-remon219/search-boost) · [pi-search-boost](https://github.com/Mr-remon219/pi-search-boost) · [Linux.do](https://linux.do/)
