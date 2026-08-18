@@ -19,7 +19,7 @@ import { fetchPage, makePageCache } from './lib/fetch.js'
 import { isSsrfError } from './lib/ssrf.js'
 import { runXTool, xAuthAvailableSync } from './lib/xsearch.js'
 import { fallbackXSearch, hitToPost, cleanJsonValue } from './lib/xfallback.js'
-import { authStatus, importFromGrok, importApiKey, logout, piAuthPath } from './lib/xauth.js'
+import { authStatus, importFromGrok, importApiKey, logout, piAuthPath, xAuthCacheToken } from './lib/xauth.js'
 import { SEARCH_POLICY_SECTION } from './lib/policy.js'
 import { researchRound, parallelResearch, setTimer } from './lib/research.js'
 import { getLayer, setLayer, LAYER_LABELS } from './lib/layer.js'
@@ -32,7 +32,8 @@ const PAGE_CACHE = makePageCache()
 // Per-kind TTL cache for x_search: real-time X data is cached briefly so
 // repeated identical queries do not re-run the slow hosted tool or re-hit
 // engines (keyword/semantic 5min, user 10min, thread 15min — mirrors the pi
-// extension's TTLs). Cache hits short-circuit before the credential preflight.
+// extension's TTLs). Keys include layer + auth fingerprint; lookups happen
+// after the credential preflight so official vs fallback paths do not cross.
 const X_CACHE = {
   keyword: makeCache(5 * 60 * 1000),
   semantic: makeCache(5 * 60 * 1000),
@@ -42,6 +43,29 @@ const X_CACHE = {
 // single-flight registry: concurrent identical x_search calls share one run
 const X_INFLIGHT = new Map()
 const stats = { startedAt: new Date().toISOString(), cacheHits: 0, cacheMisses: 0, tierCounts: {}, recent: [] }
+
+/** Drop fusion + x_search caches after layer or credential changes. */
+function invalidateSearchCaches() {
+  SEARCH_CACHE.clear()
+  for (const cache of Object.values(X_CACHE)) cache.clear()
+  X_INFLIGHT.clear()
+}
+
+function xSearchCacheKey(kind, args, maxResults) {
+  return JSON.stringify({
+    kind,
+    q: args.query ?? null,
+    u: args.username ?? null,
+    pid: args.post_id ?? null,
+    fd: args.from_date ?? null,
+    td: args.to_date ?? null,
+    m: maxResults,
+    ah: args.allowed_x_handles ?? null,
+    eh: args.excluded_x_handles ?? null,
+    layer: getLayer(),
+    auth: xAuthCacheToken(),
+  })
+}
 
 export function apply(ctx, config = {}) {
   let engines = engineRegistry(loadKeys())
@@ -583,15 +607,7 @@ function registerXSearchTool(ctx, bumpEngines) {
       const maxResults = Math.min(Math.max(args.max_results ?? 5, 1), 10)
       const engines = bumpEngines()
 
-      // per-kind TTL cache: repeated identical queries short-circuit here
-      const cacheKey = JSON.stringify({
-        kind, q: args.query ?? null, u: args.username ?? null, pid: args.post_id ?? null,
-        fd: args.from_date ?? null, td: args.to_date ?? null, m: maxResults,
-        ah: args.allowed_x_handles ?? null,
-        eh: args.excluded_x_handles ?? null,
-      })
-      const cached = X_CACHE[kind].get(cacheKey)
-      if (cached) return { ...cached, cacheHit: true, tookMs: 0 }
+      const cacheKey = xSearchCacheKey(kind, args, maxResults)
       // single-flight: concurrent identical calls share one execution instead
       // of stampeding the hosted tool / engines
       const inFlight = X_INFLIGHT.get(cacheKey)
@@ -642,8 +658,13 @@ function registerXSearchTool(ctx, bumpEngines) {
         // preflight (sync, zero network): no official credentials → straight to
         // the multi-engine chain instead of waiting on a primary-path timeout
         if (!xAuthAvailableSync()) {
+          const cachedNoAuth = X_CACHE[kind].get(cacheKey)
+          if (cachedNoAuth) return { ...cachedNoAuth, cacheHit: true, tookMs: 0 }
           return runFallback('no xAI credentials (official path disabled — /x-login enables it)')
         }
+
+        const cached = X_CACHE[kind].get(cacheKey)
+        if (cached) return { ...cached, cacheHit: true, tookMs: 0 }
 
         // keyword/semantic: PARALLEL instant search — hosted x_search ∥ multi-engine
         if (kind === 'keyword' || kind === 'semantic') {
@@ -768,9 +789,11 @@ function registerXLoginCommand(ctx) {
         if (parts[0] === '-k') {
           const key = parts[1] ?? ''
           importApiKey(key)
+          invalidateSearchCaches()
           return { kind: 'success', text: `x-login: API key saved → ${piAuthPath()} (public api.x.ai will be used for x_search)` }
         }
         const entry = importFromGrok()
+        invalidateSearchCaches()
         return {
           kind: 'success',
           text: `x-login: grok login imported → ${piAuthPath()} (${entry.email ?? entry.user_id ?? '?'}); official hosted x_search enabled. /x-logout disables it.`,
@@ -793,6 +816,7 @@ function registerXLogoutCommand(ctx) {
     description: 'Remove the /x-login credentials: the official hosted x_search path is disabled and x_search uses only the multi-engine / guest-GraphQL / oEmbed fallback chain. grok CLI\'s own login is untouched. Usage: /x-logout',
     handler: () => {
       const removed = logout()
+      invalidateSearchCaches()
       return {
         kind: 'success',
         text: removed
@@ -1050,6 +1074,7 @@ function registerWebChangeCommand(ctx, bumpEngines) {
       try {
         if (cmd === 'free' || cmd === 'api') {
           setLayer(cmd)
+          invalidateSearchCaches()
           return { kind: 'success', text: `web layer → **${cmd}** — ${LAYER_LABELS[cmd]}. Future searches use this layer.` }
         }
         if (cmd === 'show' || cmd === '') {
