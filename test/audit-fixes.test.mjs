@@ -131,7 +131,7 @@ describe('P1-4 fetch_page cache key', () => {
     globalThis.fetch = async (url) => {
       hits.push(String(url))
       if (String(url).startsWith('https://r.jina.ai/')) {
-        return new Response('# Title\n\nalpha paragraph here\n\nbeta paragraph here\n\n', { status: 200 })
+        return new Response('# Title\n\nalpha paragraph here with enough padding to exceed the minimum cache length comfortably\n\nbeta paragraph here\n\n', { status: 200 })
       }
       return orig(url)
     }
@@ -142,6 +142,45 @@ describe('P1-4 fetch_page cache key', () => {
       assert.equal(first.cacheHit, false)
       assert.equal(second.cacheHit, true)
       assert.equal(hits.filter((u) => u.startsWith('https://r.jina.ai/')).length, 1)
+    } finally {
+      globalThis.fetch = orig
+    }
+  })
+
+  it('does not cache short bodies when local fallback also fails', async () => {
+    const hits = []
+    const orig = globalThis.fetch
+    globalThis.fetch = async (url) => {
+      hits.push(String(url))
+      if (String(url).startsWith('https://r.jina.ai/')) {
+        return new Response('short', { status: 200 })
+      }
+      throw new Error('local blocked')
+    }
+    try {
+      const cache = makePageCache()
+      await fetchPage('https://1.1.1.1/short', null, cache)
+      assert.equal(cache.size(), 0)
+      await fetchPage('https://1.1.1.1/short', null, cache)
+      assert.equal(hits.filter((u) => u.startsWith('https://r.jina.ai/')).length, 2)
+    } finally {
+      globalThis.fetch = orig
+    }
+  })
+
+  it('focus no-match yields word_count=0 and focusMiss flag', async () => {
+    const orig = globalThis.fetch
+    globalThis.fetch = async (url) => {
+      if (String(url).startsWith('https://r.jina.ai/')) {
+        return new Response('# Title\n\nalpha paragraph here with enough padding to skip local fallback retry\n\nbeta paragraph here\n\n', { status: 200 })
+      }
+      return orig(url)
+    }
+    try {
+      const result = await fetchPage('https://1.1.1.1/doc', 'zzzznotermzzzz', makePageCache())
+      assert.equal(result.word_count, 0)
+      assert.equal(result.content, '')
+      assert.equal(result.focusMiss, true)
     } finally {
       globalThis.fetch = orig
     }
