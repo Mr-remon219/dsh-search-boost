@@ -175,9 +175,11 @@ describe('P1-6 cache key includes tier', () => {
 })
 
 describe('P1-8 / P1-9 / P1-11 / P1-13 wiring', () => {
-  it('drops agy from simple and shares cache + signal + ddg stats', () => {
+  it('drops agy from simple and medium tiers; complex caps slow-leg wait', () => {
     assert.deepEqual(TIER_ENGINES.simple, ['bing', 'ddg', 'yahoo', 'exa-free'])
-    assert.ok(TIER_ENGINES.medium.includes('antigravity'))
+    assert.deepEqual(TIER_ENGINES.medium, ['bing', 'ddg', 'yahoo', 'exa-free', 'tavily'])
+    assert.ok(!TIER_ENGINES.medium.includes('antigravity'))
+    assert.ok(TIER_ENGINES.complex.includes('antigravity'))
     assert.ok(TIER_ENGINES.simple.includes('exa-free'))
     const provider = indexSrc.slice(indexSrc.indexOf('function registerSearchProvider'), indexSrc.indexOf('// ---------- fused_search tool'))
     assert.equal(/tier: 'simple'/.test(provider), false)
@@ -200,6 +202,36 @@ describe('P1-8 / P1-9 / P1-11 / P1-13 wiring', () => {
       },
     })
     assert.equal(seen, ac.signal)
+  })
+
+  it('medium tier does not dial antigravity', async () => {
+    const invoked = []
+    await fusedSearch({
+      query: 'tokio runtime features',
+      tier: 'medium',
+      runOne: async (engine) => {
+        invoked.push(engine)
+        return []
+      },
+    })
+    assert.equal(invoked.includes('antigravity'), false)
+  })
+
+  it('complex tier returns before a slow antigravity leg finishes', async () => {
+    const started = Date.now()
+    await fusedSearch({
+      query: 'tokio runtime architecture',
+      tier: 'complex',
+      engines: ['bing', 'antigravity'],
+      runOne: async (engine) => {
+        if (engine === 'antigravity') {
+          await new Promise((resolve) => { setTimeout(resolve, 30_000) })
+          return [{ title: 'late agy', url: 'https://example.com/agy', snippet: 'late' }]
+        }
+        return [{ title: 'fast bing', url: 'https://example.com/bing', snippet: 'fast' }]
+      },
+    })
+    assert.ok(Date.now() - started < 20_000, 'fusion must not block on the full agy timeout')
   })
 })
 
