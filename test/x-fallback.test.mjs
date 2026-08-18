@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { fallbackXSearch, splitXTitle, hitToPost, parseOEmbedHtml, decodeUserId, parseUser, parseTweets, cleanJsonValue } from '../lib/xfallback.js'
-import { buildXSearchPrompt, salvageJson, normalizePosts } from '../lib/xsearch.js'
+import { buildXSearchPrompt, salvageJson, salvageJsonForKind, normalizePosts, parseFinalMessage } from '../lib/xsearch.js'
 import { jwtTier } from '../lib/xauth.js'
 import { SEARCH_POLICY_SECTION } from '../lib/policy.js'
 
@@ -46,6 +46,55 @@ describe('v0.0.3 x_search title/entity parsing', () => {
     const text = parseOEmbedHtml('<p>100% &amp; &#999999999999; &unknown; &amp;amp;</p>')
     assert.match(text, /100% &/)
     assert.match(text, /&unknown;/)
+  })
+})
+
+describe('x_search grok-build JSON parsing', () => {
+  it('salvageJson recovers a prefixed JSON array for keyword mode', () => {
+    const posts = [
+      { id: '1', text: 'a', url: 'https://x.com/1' },
+      { id: '2', text: 'b', url: 'https://x.com/2' },
+    ]
+    const prefixed = `Results:\n${JSON.stringify(posts)}`
+    assert.equal(normalizePosts(salvageJson(prefixed)).length, 2)
+    assert.equal(normalizePosts(salvageJsonForKind(prefixed, 'keyword')).length, 2)
+  })
+
+  it('salvageJsonForKind user mode prefers profile object over post array', () => {
+    const posts = [{ id: '1', text: 'a', url: 'https://x.com/1' }]
+    const profile = { id: '42', username: 'NASA', name: 'NASA', followers: 100, bio: 'space' }
+    const mixed = `Some posts:\n${JSON.stringify(posts)}\nProfile:\n${JSON.stringify(profile)}`
+    const parsed = salvageJsonForKind(mixed, 'user')
+    assert.equal(parsed.username, 'NASA')
+    assert.equal(parsed.followers, 100)
+  })
+
+  it('salvageJsonForKind user mode rejects empty array (no fake profile)', () => {
+    assert.equal(salvageJsonForKind('[]', 'user'), null)
+    assert.equal(salvageJsonForKind('No user found:\n[]', 'user'), null)
+    assert.equal(salvageJsonForKind(JSON.stringify([{ text: 'only a post', url: 'https://x.com/1' }]), 'user'), null)
+  })
+
+  it('parseFinalMessage uses only the last message with content', () => {
+    const wrong = [{ id: 'wrong', text: 'bad', url: 'https://x.com/wrong' }]
+    const correct = [{ id: 'good', text: 'right payload', url: 'https://x.com/good' }]
+    const { data } = parseFinalMessage({
+      output: [
+        { type: 'message', content: [{ type: 'output_text', text: JSON.stringify(wrong) }] },
+        { type: 'tool_call', content: [] },
+        { type: 'message', content: [{ type: 'output_text', text: JSON.stringify(correct) }] },
+      ],
+    })
+    assert.equal(normalizePosts(data).length, 1)
+    assert.equal(normalizePosts(data)[0].id, 'good')
+    assert.match(normalizePosts(data)[0].text, /right payload/)
+  })
+
+  it('readGrokClientInfo reads version from ~/.grok/models_cache.json when present', async () => {
+    const { readGrokClientInfo } = await import('../lib/xsearch.js')
+    const info = readGrokClientInfo()
+    assert.match(info.version, /^\d+\.\d+\.\d+$/)
+    assert.ok(info.defaultModel.startsWith('grok-'))
   })
 })
 
@@ -377,6 +426,103 @@ describe('v0.0.4 wiring regression', () => {
       assert.equal(second.cacheHit, true)
       assert.ok(calls <= callsAfterFirst, 'cache hit must not re-fetch')
       assert.deepEqual(second.items, first.items)
+    } finally {
+      globalThis.fetch = origFetch
+    }
+  })
+
+  it('x_search cache invalidates on /web_change layer switch', async () => {
+    const { apply } = await import('../index.js')
+    const tools = new Map()
+    const commands = new Map()
+    const commandsService = { register: (c) => { commands.set(c.name, c); return c } }
+    const ctx = {
+      get: (s) => ({ commands: commandsService, subagents: null }[s]),
+      web: { registerSearchProvider: () => {}, registerFetchProvider: () => {} },
+      tools: { register: (t) => tools.set(t.name, t) },
+      systemPrompt: { section: () => {} },
+      timeout: (ms) => ms,
+    }
+    apply(ctx, {})
+    const xTool = tools.get('x_search')
+    const webChange = commands.get('web_change')
+    const origFetch = globalThis.fetch
+    let calls = 0
+    globalThis.fetch = async (url) => {
+      calls++
+      const u = String(url)
+      if (u.startsWith('https://www.bing.com/')) {
+        return new Response(
+          '<li class="b_algo"><h2><a href="https://x.com/OpenAI/status/222">OpenAI on X: &quot;layer cache probe&quot;</a></h2><p>probe</p></li>',
+          { status: 200 },
+        )
+      }
+      if (u.startsWith('https://publish.x.com/oembed')) {
+        return new Response(
+          JSON.stringify({ author_name: 'OpenAI', author_url: 'https://x.com/OpenAI', html: '<blockquote>layer cache probe full body text here</blockquote>' }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      throw new Error('unexpected fetch: ' + u)
+    }
+    try {
+      const args = { type: 'keyword', query: 'layer cache probe', max_results: 1 }
+      const first = await xTool.execute(args, { signal: undefined })
+      assert.ok(first.results >= 1)
+      const callsAfterFirst = calls
+      const second = await xTool.execute(args, { signal: undefined })
+      assert.equal(second.cacheHit, true)
+      webChange.handler({ rawInput: 'api' })
+      const third = await xTool.execute(args, { signal: undefined })
+      assert.notEqual(third.cacheHit, true)
+      assert.ok(calls > callsAfterFirst, 'layer change must bust x_search cache')
+    } finally {
+      globalThis.fetch = origFetch
+    }
+  })
+
+  it('x_search cache invalidates on /x-logout', async () => {
+    const { apply } = await import('../index.js')
+    const tools = new Map()
+    const commands = new Map()
+    const commandsService = { register: (c) => { commands.set(c.name, c); return c } }
+    const ctx = {
+      get: (s) => ({ commands: commandsService, subagents: null }[s]),
+      web: { registerSearchProvider: () => {}, registerFetchProvider: () => {} },
+      tools: { register: (t) => tools.set(t.name, t) },
+      systemPrompt: { section: () => {} },
+      timeout: (ms) => ms,
+    }
+    apply(ctx, {})
+    const xTool = tools.get('x_search')
+    const logout = commands.get('x-logout')
+    const origFetch = globalThis.fetch
+    let calls = 0
+    globalThis.fetch = async (url) => {
+      calls++
+      const u = String(url)
+      if (u.startsWith('https://www.bing.com/')) {
+        return new Response(
+          '<li class="b_algo"><h2><a href="https://x.com/OpenAI/status/333">OpenAI on X: &quot;logout cache probe&quot;</a></h2><p>probe</p></li>',
+          { status: 200 },
+        )
+      }
+      if (u.startsWith('https://publish.x.com/oembed')) {
+        return new Response(
+          JSON.stringify({ author_name: 'OpenAI', author_url: 'https://x.com/OpenAI', html: '<blockquote>logout cache probe full body</blockquote>' }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      throw new Error('unexpected fetch: ' + u)
+    }
+    try {
+      const args = { type: 'keyword', query: 'logout cache probe', max_results: 1 }
+      await xTool.execute(args, { signal: undefined })
+      const callsAfterFirst = calls
+      await xTool.execute(args, { signal: undefined })
+      logout.handler({})
+      await xTool.execute(args, { signal: undefined })
+      assert.ok(calls > callsAfterFirst, '/x-logout must bust x_search cache')
     } finally {
       globalThis.fetch = origFetch
     }
