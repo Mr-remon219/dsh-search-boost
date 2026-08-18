@@ -37,7 +37,7 @@
 
 ```sh
 dsh plugin --profile web add dsh-search-boost          # 最新版
-dsh plugin --profile web add dsh-search-boost@0.1.2    # 指定版本
+dsh plugin --profile web add dsh-search-boost@0.1.3    # 指定版本
 dsh plugin --profile web update dsh-search-boost       # 更新
 ```
 

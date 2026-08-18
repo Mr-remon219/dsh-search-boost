@@ -37,7 +37,7 @@ Keyless engines run **in parallel** so one failure never leaves you empty-handed
 
 ```sh
 dsh plugin --profile web add dsh-search-boost          # latest
-dsh plugin --profile web add dsh-search-boost@0.1.2    # pin a version
+dsh plugin --profile web add dsh-search-boost@0.1.3    # pin a version
 dsh plugin --profile web update dsh-search-boost       # update to a newer release
 ```
 
